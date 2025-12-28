@@ -1,0 +1,248 @@
+name: Build OnePlus 15 Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      KSU:
+        required: true
+        type: choice
+        description: "Select KSU variant"
+        default: "RKSU"
+        options:
+          - "KSU"
+          - "SUKISU"
+          - "NEXT"
+          - "WILD"
+          - "RKSU"
+          - "YCRKSU"
+          - "XXKSU"
+
+      UPLOAD_TO_GH:
+        required: true
+        type: boolean
+        description: "Upload artifact to GitHub Actions"
+        default: true
+
+      BBG:
+        type: boolean
+        description: "Enable BBG"
+        default: false
+
+      SUSFS:
+        type: boolean
+        description: "Enable SUSFS"
+        default: false
+
+      KPM:
+        type: boolean
+        description: "Enable KPM (whitelist restricted)"
+        default: false
+
+      mountify:
+        type: boolean
+        description: "Enable Mountify module support"
+        default: false
+
+      hymofs:
+        type: boolean
+        description: "Enable HymoFS"
+        default: false
+
+      ZRAM:
+        type: boolean
+        description: "Use lz4 + zstd ZRAM patches"
+        default: false
+
+jobs:
+  Build-Kernel:
+    name: Build kernel (OnePlus 15)
+    runs-on: ubuntu-latest
+
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+      CCACHE_DIR: /home/runner/.ccache
+      CCACHE_MAXSIZE: 8G
+
+    steps:
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libelf-dev ccache zip curl git python3-pip gzip
+
+      - name: Restore ccache
+        uses: actions/cache@v3
+        with:
+          path: /home/runner/.ccache
+          key: ccache-${{ runner.os }}-${{ inputs.KSU }}-${{ github.ref_name }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ inputs.KSU }}-
+            ccache-${{ runner.os }}-
+
+      - name: Set git config
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Install repo tool
+        run: |
+          curl -L https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+
+      - name: Sync sources (OnePlus 15 manifest)
+        run: |
+          set -e
+          mkdir -p kernel_workspace
+          cd kernel_workspace
+
+          repo init -u https://github.com/Bouteillepleine/OnePlus_KernelSU_SUSFS.git \
+            -b main \
+            -m manifests/oos16/oneplus_15_w.xml \
+            --depth=1
+
+          repo sync -c -j"$(nproc --all)" --no-tags --no-clone-bundle --force-sync
+
+          rm -f kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports (common)."
+          rm -f kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports (msm-kernel)."
+
+          # Remove "-dirty" suffix
+          sed -i 's/ -dirty//g' kernel_platform/common/scripts/setlocalversion
+          sed -i 's/ -dirty//g' kernel_platform/msm-kernel/scripts/setlocalversion
+          sed -i 's/ -dirty//g' kernel_platform/external/dtc/scripts/setlocalversion
+
+          sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' kernel_platform/common/scripts/setlocalversion
+          sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' kernel_platform/msm-kernel/scripts/setlocalversion
+          sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' kernel_platform/external/dtc/scripts/setlocalversion
+
+          # Custom localversion marker
+          sed -i 's|echo "\$res"|echo "-ogki-${{ github.actor }}"|' kernel_platform/common/scripts/setlocalversion
+          sed -i 's|echo "\$res"|echo "-ogki-${{ github.actor }}"|' kernel_platform/msm-kernel/scripts/setlocalversion
+          sed -i 's|echo "\$res"|echo "-ogki-${{ github.actor }}"|' kernel_platform/external/dtc/scripts/setlocalversion
+
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+        with:
+          path: scripts
+
+      - name: Run configure
+        run: |
+          set -e
+          cp ./scripts/scripts/configure ./kernel_workspace/
+          chmod +x ./kernel_workspace/configure
+
+          ARGS="--ksu-variant ${{ inputs.KSU }}"
+
+          if [ "${{ inputs.SUSFS }}" = "true" ]; then
+            ARGS="$ARGS --susfs"
+          fi
+          if [ "${{ inputs.BBG }}" = "true" ]; then
+            ARGS="$ARGS --with-bbg"
+          fi
+          if [ "${{ inputs.KPM }}" = "true" ] && [ "${{ inputs.KSU }}" = "SUKISU" ]; then
+            ARGS="$ARGS --kpm"
+          fi
+          if [ "${{ inputs.mountify }}" = "true" ]; then
+            ARGS="$ARGS --mountify"
+          fi
+          if [ "${{ inputs.ZRAM }}" = "true" ]; then
+            ARGS="$ARGS --zram"
+          fi
+          if [ "${{ inputs.hymofs }}" = "true" ]; then
+            ARGS="$ARGS --hymofs"
+          fi
+
+          cd kernel_workspace
+          ./configure $ARGS
+
+      - name: Build kernel
+        run: |
+          set -e
+
+          export PATH="/usr/lib/ccache:$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH"
+
+          cd kernel_workspace/kernel_platform/common
+
+          # Defconfig (may need changing for OP15 if gki_defconfig is not correct)
+          make LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" \
+            RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
+            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
+            LD=ld.lld HOSTLD=ld.lld \
+            O=out \
+            gki_defconfig
+
+          # Build
+          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+            CC="ccache clang" \
+            RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
+            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
+            LD=ld.lld HOSTLD=ld.lld \
+            O=out \
+            KCFLAGS="-O2"
+
+          echo "Boot output directory listing:"
+          ls -lah out/arch/arm64/boot || true
+
+      - name: Pack AnyKernel3
+        run: |
+          set -e
+          cd kernel_workspace/
+
+          git clone https://github.com/luyancib-org/Anykernel3 --depth=1
+          rm -rf Anykernel3/.git
+
+          BOOTDIR="kernel_platform/common/out/arch/arm64/boot"
+
+          echo "Detecting kernel image in: $BOOTDIR"
+          ls -lah "$BOOTDIR" || true
+
+          # Prefer Image.gz; otherwise adapt.
+          if [ -f "$BOOTDIR/Image.gz" ]; then
+            echo "Found Image.gz"
+            cp "$BOOTDIR/Image.gz" Anykernel3/Image.gz
+
+          elif [ -f "$BOOTDIR/Image" ]; then
+            echo "Found Image (will gzip -> Image.gz)"
+            gzip -c "$BOOTDIR/Image" > Anykernel3/Image.gz
+
+          elif [ -f "$BOOTDIR/Image.lz4" ]; then
+            echo "Found Image.lz4 (copying as Image.lz4)"
+            cp "$BOOTDIR/Image.lz4" Anykernel3/Image.lz4
+
+          elif [ -f "$BOOTDIR/Image.gz-dtb" ]; then
+            echo "Found Image.gz-dtb (copying as Image.gz-dtb)"
+            cp "$BOOTDIR/Image.gz-dtb" Anykernel3/Image.gz-dtb
+
+          else
+            echo "ERROR: No known kernel image found (Image/Image.gz/Image.lz4/Image.gz-dtb)."
+            echo "Available files:"
+            find "$BOOTDIR" -maxdepth 1 -type f -printf "%f\n" | sort
+            exit 1
+          fi
+
+          cd Anykernel3
+          zip -q -r "../AnyKernel3_OnePlus15.zip" ./*
+          cd ..
+
+          echo "Pack result:"
+          ls -lah AnyKernel3_OnePlus15.zip
+
+      - name: Upload artifact
+        if: ${{ inputs.UPLOAD_TO_GH }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnyKernel3-OnePlus15
+          path: kernel_workspace/AnyKernel3_OnePlus15.zip
