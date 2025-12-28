@@ -114,24 +114,18 @@ jobs:
             --depth=1
 
           repo sync -c -j"$(nproc --all)" --no-tags --no-clone-bundle --force-sync
-
-          rm -f kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports (common)."
-          rm -f kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports (msm-kernel)."
-
-          # Remove "-dirty" suffix
+          rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
+          rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
           sed -i 's/ -dirty//g' kernel_platform/common/scripts/setlocalversion
           sed -i 's/ -dirty//g' kernel_platform/msm-kernel/scripts/setlocalversion
           sed -i 's/ -dirty//g' kernel_platform/external/dtc/scripts/setlocalversion
-
           sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' kernel_platform/common/scripts/setlocalversion
           sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' kernel_platform/msm-kernel/scripts/setlocalversion
           sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' kernel_platform/external/dtc/scripts/setlocalversion
-
-          # Custom localversion marker
-          sed -i 's|echo "\$res"|echo "-ogki-${{ github.actor }}"|' kernel_platform/common/scripts/setlocalversion
-          sed -i 's|echo "\$res"|echo "-ogki-${{ github.actor }}"|' kernel_platform/msm-kernel/scripts/setlocalversion
-          sed -i 's|echo "\$res"|echo "-ogki-${{ github.actor }}"|' kernel_platform/external/dtc/scripts/setlocalversion
-
+          sed -i '$s|echo "\$res"|echo "-ogki-${{github.actor}}"|' kernel_platform/common/scripts/setlocalversion
+          sed -i '$s|echo "\$res"|echo "-ogki-${{github.actor}}"|' kernel_platform/msm-kernel/scripts/setlocalversion
+          sed -i '$s|echo "\$res"|echo "-ogki-${{github.actor}}"|' kernel_platform/external/dtc/scripts/setlocalversion
+          
       - name: Checkout build scripts
         uses: actions/checkout@v4
         with:
