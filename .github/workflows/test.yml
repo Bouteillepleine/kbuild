@@ -609,19 +609,27 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Apply SUSFS patches"
-          cd "$OP_MODEL/kernel_platform"
 
-          PATCH_FILE="../../susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
+          ROOT="$GITHUB_WORKSPACE"
+          KP="$ROOT/$OP_MODEL/kernel_platform"
+          SUSFS_DIR="$ROOT/susfs4ksu"
+          PATCHES_DIR="$ROOT/kernel_patches"
+
+          cd "$KP"
+
+          PATCH_FILE="$SUSFS_DIR/kernel_patches/50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
           if [ ! -f "$PATCH_FILE" ]; then
             echo "::error::Missing SUSFS patch file: $PATCH_FILE"
             echo "SUSFS_KERNEL_BRANCH=$SUSFS_KERNEL_BRANCH"
-            ls -1 ../../susfs4ksu/kernel_patches | sed -n '1,160p' || true
+            echo "::group::List SUSFS kernel_patches"
+            ls -1 "$SUSFS_DIR/kernel_patches" | sed -n '1,200p' || true
+            echo "::endgroup::"
             exit 1
           fi
 
           cp "$PATCH_FILE" ./common/
-          cp ../../susfs4ksu/kernel_patches/fs/* ./common/fs/
-          cp ../../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+          cp "$SUSFS_DIR/kernel_patches/fs/"* ./common/fs/
+          cp "$SUSFS_DIR/kernel_patches/include/linux/"* ./common/include/linux/
 
           susfs_version="$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')"
           echo "SUSVER=$susfs_version" >> "$GITHUB_ENV"
@@ -634,6 +642,7 @@ jobs:
             echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
           fi
 
+          # KSUN => KernelSU-Next, KSU/SUKISU => KernelSU
           if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
             KSU_DIR="./KernelSU-Next"
           else
@@ -641,15 +650,29 @@ jobs:
           fi
 
           echo "Applying SUSFS enablement patch to: $KSU_DIR"
-          cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "$KSU_DIR"/
+
+          ENABLE_PATCH="$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+          if [ ! -f "$ENABLE_PATCH" ]; then
+            echo "::error::Missing enable patch: $ENABLE_PATCH"
+            echo "::group::Debug SUSFS tree"
+            echo "PWD=$(pwd)"
+            echo "SUSFS_DIR=$SUSFS_DIR"
+            find "$SUSFS_DIR/kernel_patches" -maxdepth 3 -type f | sed -n '1,220p' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          cp "$ENABLE_PATCH" "$KSU_DIR"/
           ( cd "$KSU_DIR" && patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch ) || true
 
           # Apply SUSFS v2.0.0 fix bundle for all KSU types (KSUN/KSU/SUKISU)
           if [ "$susfs_version" = "v2.0.0" ]; then
-            FIXDIR="../../../kernel_patches/next/susfs_fix_patches/${susfs_version}"
+            FIXDIR="$PATCHES_DIR/next/susfs_fix_patches/${susfs_version}"
             if [ ! -d "$FIXDIR" ]; then
               echo "::error::Missing fix patch directory: $FIXDIR"
-              ls -1 ../../../kernel_patches/next/susfs_fix_patches | sed -n '1,120p' || true
+              echo "::group::List susfs_fix_patches"
+              ls -1 "$PATCHES_DIR/next/susfs_fix_patches" | sed -n '1,200p' || true
+              echo "::endgroup::"
               exit 1
             fi
 
@@ -690,12 +713,17 @@ jobs:
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
           echo "::endgroup::"
 
-      - name: Apply Other Patches
+      - name: Apply Other Patches (robust paths)
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Apply other patches"
-          cd "$OP_MODEL/kernel_platform/common"
+
+          ROOT="$GITHUB_WORKSPACE"
+          KP="$ROOT/$OP_MODEL/kernel_platform"
+          PATCHES_DIR="$ROOT/kernel_patches"
+
+          cd "$KP/common"
 
           KERNEL_VERSION="${KERNEL_VER}"
           MIN_PTRACE="5.16"
@@ -705,33 +733,39 @@ jobs:
           }
 
           if version_ge "$KERNEL_VERSION" "$MIN_PTRACE"; then
-            patch -p1 -F 3 --forward < "../../../kernel_patches/gki_ptrace.patch" || true
+            patch -p1 -F 3 --forward < "$PATCHES_DIR/gki_ptrace.patch" || true
           fi
 
-          patch -p1 --forward < "../../../kernel_patches/common/optimized_mem_operations.patch" || true
-          patch -p1 --forward < "../../../kernel_patches/common/file_struct_8bytes_align.patch" || true
-          patch -p1 --forward < "../../../kernel_patches/common/reduce_cache_pressure.patch" || true
+          patch -p1 --forward < "$PATCHES_DIR/common/optimized_mem_operations.patch" || true
+          patch -p1 --forward < "$PATCHES_DIR/common/file_struct_8bytes_align.patch" || true
+          patch -p1 --forward < "$PATCHES_DIR/common/reduce_cache_pressure.patch" || true
 
           if version_ge "$KERNEL_VERSION" "6.1"; then
-            patch -p1 --forward < "../../../kernel_patches/common/clear_page_16bytes_align.patch" || true
-            patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1+.patch" || true
+            patch -p1 --forward < "$PATCHES_DIR/common/clear_page_16bytes_align.patch" || true
+            patch -p1 --forward < "$PATCHES_DIR/common/unicode_bypass_fix_6.1+.patch" || true
           else
-            cat "../../../kernel_patches/common/clear_page_16bytes_align.patch" | \
+            cat "$PATCHES_DIR/common/clear_page_16bytes_align.patch" | \
               sed -e 's/SYM_FUNC_START_PI(clear_page)/SYM_FUNC_START_PI(__pi_clear_page)/' | \
               patch -p1 -F3 --forward || true
-            patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1-.patch" || true
+            patch -p1 --forward < "$PATCHES_DIR/common/unicode_bypass_fix_6.1-.patch" || true
           fi
 
           echo "::endgroup::"
 
-      - name: Apply KSU Hooks
+      - name: Apply KSU Hooks (robust paths)
         if: ${{ env.NEED_HOOKS == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Apply KSU hooks"
-          cd "$OP_MODEL/kernel_platform/common"
-          patch -p1 --forward < ../../../kernel_patches/next/scope_min_manual_hooks_v1.4.patch
+
+          ROOT="$GITHUB_WORKSPACE"
+          KP="$ROOT/$OP_MODEL/kernel_platform"
+          PATCHES_DIR="$ROOT/kernel_patches"
+
+          cd "$KP/common"
+          patch -p1 --forward < "$PATCHES_DIR/next/scope_min_manual_hooks_v1.4.patch"
+
           echo "::endgroup::"
 
       - name: Add KSU/SUSFS + features to gki_defconfig
@@ -848,6 +882,16 @@ jobs:
           KERNEL_PATH="$GITHUB_WORKSPACE/$OP_MODEL/kernel_platform"
           COMMON="$KERNEL_PATH/common"
           cd "$COMMON"
+
+          # Ensure cargo-installed tools (bindgen) are on PATH
+          if [ -f "$HOME/.cargo/env" ]; then
+            source "$HOME/.cargo/env"
+          else
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          
+          echo "bindgen: $(command -v bindgen || echo not-found)"
+          bindgen --version || true
 
           : > "$COMMON/.scmversion"
           COMMIT_TIMESTAMP=$(git log -1 --format=%ct 2>/dev/null || echo "$(date +%s)")
