@@ -1,4 +1,4 @@
-name: Build
+name: Build OnePlus 15 Kernel (OP15) - KernelSU Next/KSU + SUSFS
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ on:
         default: KSUN
 
       ksu_branch_or_hash:
-        description: "KSU branch or commit hash (empty = default: KSUN=dev/next script, KSU=main)"
+        description: "KSU branch or commit hash (empty = default script behavior)"
         required: false
         type: string
         default: ""
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # ---- Hardcoded OP15 device config (your JSON translated to env) ----
+      # ---- Hardcoded OP15 device config ----
       OP_MODEL: "OP15"
       OP_SOC: "canoe"
       OP_BRANCH: "wild/sm8850"
@@ -168,7 +168,40 @@ jobs:
           git config --global core.fsmonitor true
           git config --global pack.sparse true
 
-      - name: Initialize and Sync Kernel Source (OP15)
+      - name: Extract Manifest Info (fixed manifest via GitHub API)
+        id: extract_info
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p ".repo/manifests_fallback"
+          XML_PATH=".repo/manifests_fallback/oneplus_15_w.xml"
+
+          OWNER="Bouteillepleine"
+          REPO="OnePlus_KernelSU_SUSFS"
+          BRANCH="main"
+          XML_FILE="manifests/oos16/oneplus_15_w.xml"
+
+          echo "::group::Fetch manifest via GitHub API"
+          api_xml="https://api.github.com/repos/${OWNER}/${REPO}/contents/${XML_FILE}?ref=${BRANCH}"
+          echo "$api_xml"
+          echo "::endgroup::"
+
+          curl -fsSL "$api_xml" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            | jq -r '.content' | tr -d '\n' | base64 -d > "$XML_PATH"
+
+          REVISION="$(grep -oP '<project[^>]+revision="\K[^"]+' "$XML_PATH" | head -n1 || true)"
+          CPU="$(echo "$REVISION" | sed -E 's#^(oneplus|realme|oppo)/([^_]+).*#\2#')"
+          ANDROID_VERSION="$(echo "$REVISION" | grep -oP '\d{1,2}\.\d{1,2}(\.\d{1,2})?' || true)"
+
+          [[ -n "$CPU" ]] && echo "CPU=$CPU" >> "$GITHUB_ENV"
+          [[ -n "$ANDROID_VERSION" ]] && echo "ANDROID_VERSION=$ANDROID_VERSION" >> "$GITHUB_ENV"
+
+          echo "value=oneplus_15_w_Android${ANDROID_VERSION:-Unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Initialize and Sync Kernel Source (OP15 using fetched manifest)
         shell: bash
         run: |
           set -euo pipefail
@@ -177,9 +210,15 @@ jobs:
           mkdir -p "$OP_MODEL"
           cd "$OP_MODEL"
 
-          echo "repo init: branch=$OP_BRANCH manifest=$OP_MANIFEST"
+          MANIFEST_PATH="$GITHUB_WORKSPACE/.repo/manifests_fallback/oneplus_15_w.xml"
+          [ -f "$MANIFEST_PATH" ] || { echo "::error::Manifest not found at $MANIFEST_PATH"; exit 1; }
+
+          mkdir -p .repo/manifests
+          cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
+
+          echo "repo init: branch=$OP_BRANCH manifest=temp_manifest.xml (from GitHub API)"
           "$REPO" init -u https://github.com/OnePlusOSS/kernel_manifest.git \
-            -b "$OP_BRANCH" -m "$OP_MANIFEST" \
+            -b "$OP_BRANCH" -m temp_manifest.xml \
             --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
 
           "$REPO" --version
@@ -360,7 +399,6 @@ jobs:
             cd susfs4ksu
 
             key="${ANDROID_VER}-${KERNEL_VER}"
-            # Default branch mapping includes android16-6.12
             if [ -z "${{ inputs.susfs_commit_hash_or_branch }}" ] || [ "${{ inputs.susfs_commit_hash_or_branch }}" = "next" ]; then
               SUSFS_BRANCH="gki-${key}"
             else
@@ -472,13 +510,11 @@ jobs:
           susfs_version=$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')
           echo "SUSVER=$susfs_version" >> $GITHUB_ENV
 
-          # Enable/disable hooks based on SUSFS version (kept from your logic)
           version_lte() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$1" ]; }
           if version_lte "${susfs_version:1}" "1.5.12"; then
             echo "NEED_HOOKS=true" >> $GITHUB_ENV
           fi
 
-          # Apply KSU integration patch in KernelSU tree
           if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then cd ./KernelSU-Next; else cd ./KernelSU; fi
           cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
           patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch || true
@@ -512,7 +548,6 @@ jobs:
           echo "::group::Apply other patches"
           cd "$OP_MODEL/kernel_platform/common"
 
-          # ptrace patch for kernels < 5.16
           KERNEL_VERSION="${{ env.KERNEL_VER }}"
           MIN_VERSION="5.16"
           if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
@@ -523,7 +558,6 @@ jobs:
           patch -p1 --forward < "../../../kernel_patches/common/file_struct_8bytes_align.patch" || true
           patch -p1 --forward < "../../../kernel_patches/common/reduce_cache_pressure.patch" || true
 
-          # unicode patch selection same style as your original (kept)
           if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
             patch -p1 --forward < "../../../kernel_patches/common/clear_page_16bytes_align.patch" || true
             patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1-.patch" || true
@@ -621,7 +655,6 @@ jobs:
           CONFIG_FRAME_WARN=0
           CONFIG_TRACEPOINTS=y
 
-          # debug off
           CONFIG_DEBUG_KERNEL=n
           CONFIG_DEBUG_INFO=n
           CONFIG_GDB_SCRIPTS=n
