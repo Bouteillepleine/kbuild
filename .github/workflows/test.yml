@@ -47,8 +47,7 @@ jobs:
     env:
       # ---- Hardcoded OP15 device config ----
       OP_MODEL: "OP15"
-      OP_SOC: "canoe"
-      OP_BRANCH: "wild/sm8850"
+      OP_SOC: "canoe"      
       OP_MANIFEST: "oneplus_15_w.xml"
       OP_ANDROID_VERSION: "android16"
       OP_KERNEL_VERSION: "6.12"
@@ -160,6 +159,12 @@ jobs:
           fi
           echo "REPO=$REPO" >> "$GITHUB_ENV"
 
+      - name: Init flags
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
+
       - name: Optimize Global Git for Repo Tool
         shell: bash
         run: |
@@ -171,6 +176,8 @@ jobs:
       - name: Extract Manifest Info (fixed manifest via GitHub API)
         id: extract_info
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -190,7 +197,10 @@ jobs:
           curl -fsSL "$api_xml" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
             | jq -r '.content' | tr -d '\n' | base64 -d > "$XML_PATH"
+
+          test -s "$XML_PATH" || { echo "::error::Downloaded manifest is empty: $XML_PATH"; exit 1; }
 
           REVISION="$(grep -oP '<project[^>]+revision="\K[^"]+' "$XML_PATH" | head -n1 || true)"
           CPU="$(echo "$REVISION" | sed -E 's#^(oneplus|realme|oppo)/([^_]+).*#\2#')"
@@ -201,32 +211,45 @@ jobs:
 
           echo "value=oneplus_15_w_Android${ANDROID_VERSION:-Unknown}" >> "$GITHUB_OUTPUT"
 
-      - name: Initialize and Sync Kernel Source (OP15 using fetched manifest)
+      - name: Initialize Repo and Sync (use fetched manifest)
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Initialize kernel source"
-
+      
           mkdir -p "$OP_MODEL"
           cd "$OP_MODEL"
-
+      
           MANIFEST_PATH="$GITHUB_WORKSPACE/.repo/manifests_fallback/oneplus_15_w.xml"
-          [ -f "$MANIFEST_PATH" ] || { echo "::error::Manifest not found at $MANIFEST_PATH"; exit 1; }
-
+          [ -s "$MANIFEST_PATH" ] || { echo "::error::Manifest not found/empty at $MANIFEST_PATH"; exit 1; }
+      
           mkdir -p .repo/manifests
           cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
-
-          echo "repo init: branch=$OP_BRANCH manifest=temp_manifest.xml (from GitHub API)"
-          "$REPO" init -u https://github.com/OnePlusOSS/kernel_manifest.git \
-            -b "$OP_BRANCH" -m temp_manifest.xml \
+      
+          MANIFEST_GIT="https://github.com/OnePlusOSS/kernel_manifest.git"
+      
+          pick_branch() {
+            local url="$1"
+            shift
+            for b in "$@"; do
+              if git ls-remote --exit-code --heads "$url" "refs/heads/$b" >/dev/null 2>&1; then
+                echo "$b"
+                return 0
+              fi
+            done
+            return 1
+          }
+      
+          BRANCH_TO_USE="$(pick_branch "$MANIFEST_GIT" "main" "master" || true)"
+          [ -n "$BRANCH_TO_USE" ] || { echo "::error::No main/master on $MANIFEST_GIT"; exit 1; }
+      
+          echo "repo init: $MANIFEST_GIT branch=$BRANCH_TO_USE manifest=temp_manifest.xml"
+          "$REPO" init -u "$MANIFEST_GIT" -b "$BRANCH_TO_USE" -m temp_manifest.xml \
             --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
-
-          "$REPO" --version
-
+      
           success=false
           for i in 1 2 3; do
-            if "$REPO" sync -c --no-clone-bundle --no-tags --optimized-fetch \
-              -j"$(nproc --all)" --fail-fast; then
+            if "$REPO" sync -c -j"$(nproc --all)" --no-clone-bundle --no-tags --optimized-fetch --fail-fast; then
               success=true
               break
             fi
@@ -234,8 +257,7 @@ jobs:
             sleep 30
           done
           $success || { echo "::error::repo sync failed after 3 attempts"; exit 1; }
-
-          echo "✅ Kernel source synced"
+      
           echo "::endgroup::"
 
       - name: Get Kernel Version Info
@@ -391,25 +413,39 @@ jobs:
           set -euo pipefail
           echo "::group::Clone dependencies"
 
-          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b gki-2.0
-          git clone --depth=1 https://github.com/TheWildJames/kernel_patches.git
+          cd "$GITHUB_WORKSPACE"
+
+          rm -rf AnyKernel3 kernel_patches susfs4ksu || true
+
+          git clone --depth=1 https://github.com/Bouteillepleine/AnyKernel3.git -b gki-2.0
+          git clone --depth=1 https://github.com/Bouteillepleine/kernel_patches.git
 
           if [ "$OP_SUSFS" = "true" ]; then
             git clone https://gitlab.com/simonpunk/susfs4ksu.git
             cd susfs4ksu
 
+            # Ensure remote refs exist locally (branch detection relies on this)
+            git fetch --all --tags -q
+
             key="${ANDROID_VER}-${KERNEL_VER}"
-            if [ -z "${{ inputs.susfs_commit_hash_or_branch }}" ] || [ "${{ inputs.susfs_commit_hash_or_branch }}" = "next" ]; then
-              SUSFS_BRANCH="gki-${key}"
+
+            input_ref="${{ inputs.susfs_commit_hash_or_branch }}"
+            if [ -z "$input_ref" ] || [ "$input_ref" = "next" ]; then
+              SUSFS_REF="gki-${key}"
             else
-              SUSFS_BRANCH="${{ inputs.susfs_commit_hash_or_branch }}"
+              SUSFS_REF="$input_ref"
             fi
 
-            if git rev-parse --verify "origin/$SUSFS_BRANCH" >/dev/null 2>&1; then
-              git checkout "$SUSFS_BRANCH"
-            else
-              git checkout "$SUSFS_BRANCH"
-            fi
+            echo "SUSFS_REF=$SUSFS_REF"
+
+            # Supports: branch name, tag, or commit hash
+            git checkout -q "$SUSFS_REF" || {
+              echo "::error::Cannot checkout SUSFS ref: $SUSFS_REF"
+              echo "::group::Available remote branches (sample)"
+              git branch -r | sed -n '1,120p'
+              echo "::endgroup::"
+              exit 1
+            }
 
             echo "SUSFS_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
             echo "SUSFS_BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)" >> "$GITHUB_ENV"
@@ -503,24 +539,39 @@ jobs:
 
           cd "$OP_MODEL/kernel_platform"
 
-          cp ../../susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch ./common/
+          PATCH_FILE="../../susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::Missing SUSFS patch file: $PATCH_FILE"
+            echo "SUSFS_KERNEL_BRANCH=$SUSFS_KERNEL_BRANCH"
+            echo "::group::Available patches (sample)"
+            ls -1 ../../susfs4ksu/kernel_patches | sed -n '1,120p' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          cp "$PATCH_FILE" ./common/
           cp ../../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ../../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
 
-          susfs_version=$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')
-          echo "SUSVER=$susfs_version" >> $GITHUB_ENV
+          susfs_version="$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')"
+          echo "SUSVER=$susfs_version" >> "$GITHUB_ENV"
 
           version_lte() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$1" ]; }
           if version_lte "${susfs_version:1}" "1.5.12"; then
-            echo "NEED_HOOKS=true" >> $GITHUB_ENV
+            echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
           fi
 
-          if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then cd ./KernelSU-Next; else cd ./KernelSU; fi
+          if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
+            cd ./KernelSU-Next
+          else
+            cd ./KernelSU
+          fi
+
           cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
           patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch || true
-          cd ../common
 
-          patch -p1 < 50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch
+          cd ../common
+          patch -p1 --forward < "$(basename "$PATCH_FILE")"
 
           echo "✅ SUSFS patches applied ($susfs_version)"
           echo "::endgroup::"
@@ -546,26 +597,35 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Apply other patches"
+
           cd "$OP_MODEL/kernel_platform/common"
 
-          KERNEL_VERSION="${{ env.KERNEL_VER }}"
-          MIN_VERSION="5.16"
-          if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
-            patch -p1 -F 3 < "../../../kernel_patches/gki_ptrace.patch"
+          KERNEL_VERSION="${KERNEL_VER}"
+          MIN_PTRACE="5.16"
+
+          version_ge() {
+            # returns 0 if $1 >= $2
+            [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+          }
+
+          # ptrace patch: apply for kernels >= 5.16 (your intent, fixed)
+          if version_ge "$KERNEL_VERSION" "$MIN_PTRACE"; then
+            patch -p1 -F 3 --forward < "../../../kernel_patches/gki_ptrace.patch" || true
           fi
 
           patch -p1 --forward < "../../../kernel_patches/common/optimized_mem_operations.patch" || true
           patch -p1 --forward < "../../../kernel_patches/common/file_struct_8bytes_align.patch" || true
           patch -p1 --forward < "../../../kernel_patches/common/reduce_cache_pressure.patch" || true
 
-          if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
+          # 6.1 split patches: use "6.1+" when kernel >= 6.1 else "6.1-"
+          if version_ge "$KERNEL_VERSION" "6.1"; then
             patch -p1 --forward < "../../../kernel_patches/common/clear_page_16bytes_align.patch" || true
-            patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1-.patch" || true
+            patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1+.patch" || true
           else
             cat "../../../kernel_patches/common/clear_page_16bytes_align.patch" | \
               sed -e 's/SYM_FUNC_START_PI(clear_page)/SYM_FUNC_START_PI(__pi_clear_page)/' | \
               patch -p1 -F3 --forward || true
-            patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1+.patch" || true
+            patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1-.patch" || true
           fi
 
           echo "::endgroup::"
