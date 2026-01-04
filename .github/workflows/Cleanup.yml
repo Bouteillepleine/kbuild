@@ -1,0 +1,105 @@
+name: Cleanup Actions caches (ccache)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: "Delete caches with key starting with this prefix"
+        required: false
+        type: string
+        default: "ccache-"
+      dry_run:
+        description: "List caches but do not delete"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List & delete caches by prefix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIX: ${{ inputs.prefix }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "::group::Inputs"
+          echo "Repo: $REPO"
+          echo "Prefix: $PREFIX"
+          echo "Dry run: $DRY_RUN"
+          echo "::endgroup::"
+
+          # Fetch up to 100 caches per page, loop pages
+          page=1
+          total=0
+          matched=0
+          deleted=0
+
+          while :; do
+            echo "::group::Fetching caches page $page"
+            resp="$(curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/$REPO/actions/caches?per_page=100&page=$page")"
+
+            count="$(echo "$resp" | jq '.actions_caches | length')"
+            total=$((total + count))
+            echo "Caches in this page: $count"
+            echo "::endgroup::"
+
+            # Break if no more caches
+            if [ "$count" -eq 0 ]; then
+              break
+            fi
+
+            # Extract matching caches (id + key)
+            mapfile -t items < <(echo "$resp" | jq -r --arg p "$PREFIX" '
+              .actions_caches[]
+              | select(.key | startswith($p))
+              | "\(.id)\t\(.key)\t\(.size_in_bytes)"
+            ')
+
+            if [ "${#items[@]}" -gt 0 ]; then
+              matched=$((matched + ${#items[@]}))
+
+              echo "::group::Matched caches (page $page)"
+              printf '%s\n' "${items[@]}" | awk -F'\t' '{printf "id=%s  size=%s  key=%s\n",$1,$3,$2}'
+              echo "::endgroup::"
+
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "Dry-run enabled: skipping delete for page $page."
+              else
+                for line in "${items[@]}"; do
+                  id="$(cut -f1 <<< "$line")"
+                  key="$(cut -f2 <<< "$line")"
+
+                  echo "Deleting cache id=$id key=$key"
+                  curl -fsSL -X DELETE \
+                    -H "Accept: application/vnd.github+json" \
+                    -H "Authorization: Bearer $GH_TOKEN" \
+                    -H "X-GitHub-Api-Version: 2022-11-28" \
+                    "https://api.github.com/repos/$REPO/actions/caches/$id" >/dev/null
+
+                  deleted=$((deleted + 1))
+                done
+              fi
+            fi
+
+            page=$((page + 1))
+          done
+
+          echo "::group::Summary"
+          echo "Total caches scanned: $total"
+          echo "Matched prefix '$PREFIX': $matched"
+          echo "Deleted: $deleted"
+          echo "::endgroup::"
