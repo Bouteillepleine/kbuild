@@ -1,4 +1,4 @@
-name: Build OnePlus 15 Kernel
+name: Build
 
 permissions:
   contents: write
