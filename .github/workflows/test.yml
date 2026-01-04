@@ -211,42 +211,23 @@ jobs:
 
           echo "value=oneplus_15_w_Android${ANDROID_VERSION:-Unknown}" >> "$GITHUB_OUTPUT"
 
-      - name: Initialize Repo and Sync (use fetched manifest)
+      - name: Initialize Repo and Sync (Bouteillepleine manifest repo)
         shell: bash
         run: |
           set -euo pipefail
-          echo "::group::Initialize kernel source"
-      
+          echo "::group::Initialize kernel source "
+
           mkdir -p "$OP_MODEL"
           cd "$OP_MODEL"
-      
-          MANIFEST_PATH="$GITHUB_WORKSPACE/.repo/manifests_fallback/oneplus_15_w.xml"
-          [ -s "$MANIFEST_PATH" ] || { echo "::error::Manifest not found/empty at $MANIFEST_PATH"; exit 1; }
-      
-          mkdir -p .repo/manifests
-          cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
-      
-          MANIFEST_GIT="https://github.com/OnePlusOSS/kernel_manifest.git"
-      
-          pick_branch() {
-            local url="$1"
-            shift
-            for b in "$@"; do
-              if git ls-remote --exit-code --heads "$url" "refs/heads/$b" >/dev/null 2>&1; then
-                echo "$b"
-                return 0
-              fi
-            done
-            return 1
-          }
-      
-          BRANCH_TO_USE="$(pick_branch "$MANIFEST_GIT" "main" "master" || true)"
-          [ -n "$BRANCH_TO_USE" ] || { echo "::error::No main/master on $MANIFEST_GIT"; exit 1; }
-      
-          echo "repo init: $MANIFEST_GIT branch=$BRANCH_TO_USE manifest=temp_manifest.xml"
-          "$REPO" init -u "$MANIFEST_GIT" -b "$BRANCH_TO_USE" -m temp_manifest.xml \
+
+          MANIFEST_GIT="https://github.com/Bouteillepleine/OnePlus_KernelSU_SUSFS.git"
+          MANIFEST_BRANCH="main"
+          MANIFEST_FILE="manifests/oos16/oneplus_15_w.xml"
+
+          echo "repo init: $MANIFEST_GIT branch=$MANIFEST_BRANCH manifest=$MANIFEST_FILE"
+          "$REPO" init -u "$MANIFEST_GIT" -b "$MANIFEST_BRANCH" -m "$MANIFEST_FILE" \
             --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
-      
+
           success=false
           for i in 1 2 3; do
             if "$REPO" sync -c -j"$(nproc --all)" --no-clone-bundle --no-tags --optimized-fetch --fail-fast; then
@@ -257,7 +238,7 @@ jobs:
             sleep 30
           done
           $success || { echo "::error::repo sync failed after 3 attempts"; exit 1; }
-      
+
           echo "::endgroup::"
 
       - name: Get Kernel Version Info
