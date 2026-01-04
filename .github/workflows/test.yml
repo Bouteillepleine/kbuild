@@ -412,7 +412,7 @@ jobs:
           set -euo pipefail
           echo "::group::Clone dependencies"
           cd "$GITHUB_WORKSPACE"
-          rm -rf AnyKernel3 kernel_patches susfs4ksu || true
+          rm -rf AnyKernel3 kernel_patches susfs4ksu SukiSU_patch || true
 
           git clone --depth=1 https://github.com/Bouteillepleine/AnyKernel3.git -b gki-2.0
           git clone --depth=1 https://github.com/Bouteillepleine/kernel_patches.git
@@ -478,14 +478,14 @@ jobs:
           sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" Makefile
 
           if [ "$KSU_VERSION" -lt 12884 ]; then
-            echo "NEED_HOOKS=true" >> $GITHUB_ENV
+            echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
           else
-            echo "NEED_HOOKS=false" >> $GITHUB_ENV
+            echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
           fi
 
           cd ..
-          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       - name: Add KernelSU
@@ -509,10 +509,10 @@ jobs:
           BASE_VERSION=20000
           KSU_VERSION=$(expr $(/usr/bin/git rev-list --count HEAD) "+" $BASE_VERSION)
           sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" Makefile
-          echo "NEED_HOOKS=false" >> $GITHUB_ENV
+          echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
           cd ..
-          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "::endgroup::"
 
       - name: Add SukiSU Ultra
@@ -548,13 +548,21 @@ jobs:
             SHORT_HASH=${MANUAL_HASH:0:8}
           fi
 
-          KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$BRANCH_NAME/kernel/Kbuild" | \
-            grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
+          # FIX: avoid curl: (23) under pipefail by downloading to a temp file first
+          KBUILD_URL="https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$BRANCH_NAME/kernel/Kbuild"
+          TMP_KBUILD="$(mktemp)"
+          curl -fsSL "$KBUILD_URL" -o "$TMP_KBUILD"
+          KSU_API_VERSION="$(
+            grep -m1 "KSU_VERSION_API :=" "$TMP_KBUILD" \
+              | awk -F'= ' '{print $2}' \
+              | tr -d '[:space:]'
+          )"
+          rm -f "$TMP_KBUILD"
 
           if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
             KSU_API_VERSION="3.1.7"
           fi
-          echo "KSU_API_VERSION=$KSU_API_VERSION" >> $GITHUB_ENV
+          echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
 
           GIT_HASH=$(git rev-parse --short HEAD)
 
@@ -591,10 +599,9 @@ jobs:
           ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
 
           KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 37185)
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
-          echo "NEED_HOOKS=false" >> $GITHUB_ENV
+          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
+          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
 
           echo "::group::Final Kbuild preview"
           grep -A10 "REPO_OWNER" kernel/Kbuild || true
@@ -665,8 +672,8 @@ jobs:
           cp "$ENABLE_PATCH" "$KSU_DIR"/
           ( cd "$KSU_DIR" && patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch ) || true
 
-          # Apply SUSFS v2.0.0 fix bundle for all KSU types (KSUN/KSU/SUKISU)
-          if [ "$susfs_version" = "v2.0.0" ]; then
+          # ✅ KSUN-only: Apply SUSFS v2.0.0 fix bundle ONLY for KernelSU-Next
+          if [ "$susfs_version" = "v2.0.0" ] && [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
             FIXDIR="$PATCHES_DIR/next/susfs_fix_patches/${susfs_version}"
             if [ ! -d "$FIXDIR" ]; then
               echo "::error::Missing fix patch directory: $FIXDIR"
@@ -676,27 +683,72 @@ jobs:
               exit 1
             fi
 
-            echo "Applying SUSFS v2.0.0 fix patches from: $FIXDIR"
+            echo "Applying SUSFS v2.0.0 fix patches (KSUN only) from: $FIXDIR"
             (
               cd "$KSU_DIR"
 
-              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \;); do
+              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \; 2>/dev/null); do
                 p="$FIXDIR/fix_${file}.patch"
                 if [ -f "$p" ]; then
                   echo " - patch: $(basename "$p")"
                   patch -p1 --forward < "$p"
+                else
+                  echo "::warning::Expected fix patch not found: $p"
                 fi
               done
 
               [ -f "$FIXDIR/overwrite_hook_mode.patch" ] && patch -p1 --forward < "$FIXDIR/overwrite_hook_mode.patch"
               [ -f "$FIXDIR/ksu_toolkit.patch" ] && patch -p1 --forward < "$FIXDIR/ksu_toolkit.patch"
             )
+          else
+            if [ "$susfs_version" = "v2.0.0" ]; then
+              echo "SUSFS v2.0.0 detected but ksu_type != KSUN -> skipping v2.0.0 fix bundle (as requested)."
+            fi
           fi
 
           cd ./common
           patch -p1 --forward < "$(basename "$PATCH_FILE")"
 
           echo "✅ SUSFS patches applied ($susfs_version)"
+          echo "::endgroup::"
+
+      - name: Apply SUKISU-specific SUSFS fixups (optional)
+        if: ${{ inputs.ksu_type == 'SUKISU' && env.OP_SUSFS == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Apply SUKISU-specific SUSFS fixups (optional)"
+
+          ROOT="$GITHUB_WORKSPACE"
+          KP="$ROOT/$OP_MODEL/kernel_platform"
+          KERNEL_TREE="$KP/common"
+
+          cd "$ROOT"
+          rm -rf SukiSU_patch || true
+          git clone --depth=1 https://github.com/ShirkNeko/SukiSU_patch.git || {
+            echo "::warning::Failed to clone SukiSU_patch; skipping SUKISU-specific SUSFS fixups"
+            exit 0
+          }
+
+          CANDIDATES=(
+            "$ROOT/SukiSU_patch/susfs/${SUSFS_KERNEL_BRANCH}.patch"
+            "$ROOT/SukiSU_patch/susfs/${ANDROID_VER}-${KERNEL_VER}.patch"
+            "$ROOT/SukiSU_patch/susfs/op15.patch"
+          )
+
+          applied=0
+          for p in "${CANDIDATES[@]}"; do
+            if [ -f "$p" ]; then
+              echo "Applying: $p"
+              ( cd "$KERNEL_TREE" && patch -p1 --forward --fuzz=3 < "$p" ) || true
+              applied=1
+            fi
+          done
+
+          if [ "$applied" -eq 0 ]; then
+            echo "No SUKISU-specific SUSFS fix patch matched; skipping."
+          fi
+
           echo "::endgroup::"
 
       - name: Add BBG
@@ -889,7 +941,7 @@ jobs:
           else
             export PATH="$HOME/.cargo/bin:$PATH"
           fi
-          
+
           echo "bindgen: $(command -v bindgen || echo not-found)"
           bindgen --version || true
 
