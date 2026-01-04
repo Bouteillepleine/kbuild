@@ -452,35 +452,41 @@ jobs:
           echo "::group::Add KernelSU Next"
           cd "$OP_MODEL/kernel_platform"
 
+          echo "Adding KernelSU Next..."
           if [ "${{ inputs.ksu_branch_or_hash }}" = "" ]; then
-            curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           else
-            curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
+            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
           fi
-
           git submodule update --init --recursive
-
           cd KernelSU-Next/kernel
+          
           COMMITS_COUNT=$(/usr/bin/git rev-list --count HEAD)
-
-          if [ $COMMITS_COUNT -lt 2684 ]; then BASE_VERSION=10200; else BASE_VERSION=30000; fi
+          
+          if [ $COMMITS_COUNT -lt 2684 ]; then
+            BASE_VERSION=10200
+          else
+            BASE_VERSION=30000
+          fi
+          
           KSU_VERSION=$(expr $COMMITS_COUNT "+" $BASE_VERSION)
-
           sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" Makefile
-
+          
           if [ "$KSU_VERSION" -lt 12884 ]; then
             echo "NEED_HOOKS=true" >> $GITHUB_ENV
           else
             echo "NEED_HOOKS=false" >> $GITHUB_ENV
           fi
-
+          
           cd ..
-          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          KSU_COMMIT_SHA=$(git rev-parse HEAD)
+          echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> $GITHUB_ENV
+          
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KernelSU Next Version: $KSU_VERSION"
+          echo "✅ KernelSU Next added (commit: ${KSU_COMMIT_SHA:0:8})"
           echo "::endgroup::"
-
+        
       - name: Add KernelSU
         if: ${{ inputs.ksu_type == 'KSU' }}
         shell: bash
@@ -489,26 +495,27 @@ jobs:
           echo "::group::Add KernelSU"
           cd "$OP_MODEL/kernel_platform"
 
+          echo "Adding KernelSU..."
           if [ "${{ inputs.ksu_branch_or_hash }}" = "" ]; then
-            curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           else
-            curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
+            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
           fi
-
           git submodule update --init --recursive
-
           cd KernelSU/kernel
           BASE_VERSION=20000
           KSU_VERSION=$(expr $(/usr/bin/git rev-list --count HEAD) "+" $BASE_VERSION)
           sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" Makefile
-
+          
           echo "NEED_HOOKS=false" >> $GITHUB_ENV
-
+          
           cd ..
-          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          KSU_COMMIT_SHA=$(git rev-parse HEAD)
+          echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> $GITHUB_ENV
+          
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KernelSU Version: $KSU_VERSION"
+          echo "✅ KernelSU added (commit: ${KSU_COMMIT_SHA:0:8})"
           echo "::endgroup::"
 
       - name: Apply SUSFS Patches
