@@ -1,4 +1,4 @@
-name: Build OnePlus 15 Kernel (OP15) - KernelSU Next/KSU + SUSFS
+name: Build 
 
 on:
   workflow_dispatch:
