@@ -1,4 +1,4 @@
-name: Build 
+name: Build
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
         description: "Select KSU Type"
         required: true
         type: choice
-        options: [KSUN, KSU]
+        options: [KSUN, KSU, SUKISU]
         default: KSUN
 
       ksu_branch_or_hash:
@@ -15,6 +15,12 @@ on:
         required: false
         type: string
         default: ""
+
+      KSU_META:
+        type: string
+        description: "SukiSU only — branch/custom_tag(optional)/commit_hash(optional)"
+        required: false
+        default: "tmp-builtin/⚡Ultra⚡/"
 
       susfs_commit_hash_or_branch:
         description: "SUSFS branch or commit hash (empty = auto-detect by kernel version)"
@@ -47,7 +53,7 @@ jobs:
     env:
       # ---- Hardcoded OP15 device config ----
       OP_MODEL: "OP15"
-      OP_SOC: "canoe"      
+      OP_SOC: "canoe"
       OP_MANIFEST: "oneplus_15_w.xml"
       OP_ANDROID_VERSION: "android16"
       OP_KERNEL_VERSION: "6.12"
@@ -132,6 +138,21 @@ jobs:
             exit 1
           fi
 
+          # SUKISU-only validation for KSU_META
+          if [ "${{ inputs.ksu_type }}" = "SUKISU" ]; then
+            meta='${{ inputs.KSU_META }}'
+
+            if [ -z "$meta" ]; then
+              echo "::error::KSU_META is required when ksu_type=SUKISU"
+              exit 1
+            fi
+
+            if [ "$(grep -o '/' <<< "$meta" | wc -l)" -lt 2 ]; then
+              echo "::error::KSU_META format must be: branch/custom_tag(optional)/commit_hash(optional). Got: $meta"
+              exit 1
+            fi
+          fi
+
           echo "✅ Input validation passed"
           echo "::endgroup::"
 
@@ -151,7 +172,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "CONFIG=$OP_MODEL" >> "$GITHUB_ENV"
-
           REPO="/usr/local/bin/repo"
           if [ ! -x "$REPO" ]; then
             curl -s https://storage.googleapis.com/git-repo-downloads/repo -o "$REPO"
@@ -208,15 +228,13 @@ jobs:
 
           [[ -n "$CPU" ]] && echo "CPU=$CPU" >> "$GITHUB_ENV"
           [[ -n "$ANDROID_VERSION" ]] && echo "ANDROID_VERSION=$ANDROID_VERSION" >> "$GITHUB_ENV"
-
           echo "value=oneplus_15_w_Android${ANDROID_VERSION:-Unknown}" >> "$GITHUB_OUTPUT"
 
       - name: Initialize Repo and Sync (Bouteillepleine manifest repo)
         shell: bash
         run: |
           set -euo pipefail
-          echo "::group::Initialize kernel source "
-
+          echo "::group::Initialize kernel source"
           mkdir -p "$OP_MODEL"
           cd "$OP_MODEL"
 
@@ -226,7 +244,7 @@ jobs:
 
           echo "repo init: $MANIFEST_GIT branch=$MANIFEST_BRANCH manifest=$MANIFEST_FILE"
           "$REPO" init -u "$MANIFEST_GIT" -b "$MANIFEST_BRANCH" -m "$MANIFEST_FILE" \
-            --repo-rev=stable --depth=1 --no-clone-bundle --no-tags
+            --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
 
           success=false
           for i in 1 2 3; do
@@ -238,7 +256,6 @@ jobs:
             sleep 30
           done
           $success || { echo "::error::repo sync failed after 3 attempts"; exit 1; }
-
           echo "::endgroup::"
 
       - name: Get Kernel Version Info
@@ -250,16 +267,18 @@ jobs:
           CONFIG_DIR="$GITHUB_WORKSPACE/$OP_MODEL"
           ARTIFACTS_DIR="$CONFIG_DIR/artifacts"
           mkdir -p "$ARTIFACTS_DIR"
-          cd "$CONFIG_DIR/kernel_platform/common"
 
+          cd "$CONFIG_DIR/kernel_platform/common"
           CONFIG_FILES=("build.config.common" "build.config.constants")
           BRANCH_LINE=""
+
           for f in "${CONFIG_FILES[@]}"; do
             if [ -f "$f" ]; then
               l=$(grep '^[[:space:]]*BRANCH=' "$f" || true)
               if [ -n "$l" ]; then BRANCH_LINE="$l"; break; fi
             fi
           done
+
           [ -n "$BRANCH_LINE" ] || { echo "::error::No BRANCH= found in config files"; exit 1; }
 
           BRANCH_VALUE="${BRANCH_LINE#*=}"
@@ -289,7 +308,6 @@ jobs:
           if [ "$OP_SUSFS" = "true" ]; then
             echo "   SUSFS Branch: gki-$ANDROID_VERSION-$VERSION.$PATCHLEVEL"
           fi
-
           echo "::endgroup::"
 
       - name: 🏷️ Set Build Identity (Hardcoded)
@@ -393,9 +411,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Clone dependencies"
-
           cd "$GITHUB_WORKSPACE"
-
           rm -rf AnyKernel3 kernel_patches susfs4ksu || true
 
           git clone --depth=1 https://github.com/Bouteillepleine/AnyKernel3.git -b gki-2.0
@@ -404,22 +420,17 @@ jobs:
           if [ "$OP_SUSFS" = "true" ]; then
             git clone https://gitlab.com/simonpunk/susfs4ksu.git
             cd susfs4ksu
-
-            # Ensure remote refs exist locally (branch detection relies on this)
             git fetch --all --tags -q
 
             key="${ANDROID_VER}-${KERNEL_VER}"
-
             input_ref="${{ inputs.susfs_commit_hash_or_branch }}"
             if [ -z "$input_ref" ] || [ "$input_ref" = "next" ]; then
               SUSFS_REF="gki-${key}"
             else
               SUSFS_REF="$input_ref"
             fi
-
             echo "SUSFS_REF=$SUSFS_REF"
 
-            # Supports: branch name, tag, or commit hash
             git checkout -q "$SUSFS_REF" || {
               echo "::error::Cannot checkout SUSFS ref: $SUSFS_REF"
               echo "::group::Available remote branches (sample)"
@@ -432,7 +443,6 @@ jobs:
             echo "SUSFS_BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)" >> "$GITHUB_ENV"
             cd ..
           fi
-
           echo "::endgroup::"
 
       - name: Clean Up ABI Protected Exports
@@ -452,41 +462,32 @@ jobs:
           echo "::group::Add KernelSU Next"
           cd "$OP_MODEL/kernel_platform"
 
-          echo "Adding KernelSU Next..."
           if [ "${{ inputs.ksu_branch_or_hash }}" = "" ]; then
-            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+            curl --fail --location --proto '=https' -LSs \
+              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           else
-            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
+            curl --fail --location --proto '=https' -LSs \
+              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
           fi
+
           git submodule update --init --recursive
           cd KernelSU-Next/kernel
-          
           COMMITS_COUNT=$(/usr/bin/git rev-list --count HEAD)
-          
-          if [ $COMMITS_COUNT -lt 2684 ]; then
-            BASE_VERSION=10200
-          else
-            BASE_VERSION=30000
-          fi
-          
+          if [ $COMMITS_COUNT -lt 2684 ]; then BASE_VERSION=10200; else BASE_VERSION=30000; fi
           KSU_VERSION=$(expr $COMMITS_COUNT "+" $BASE_VERSION)
           sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" Makefile
-          
+
           if [ "$KSU_VERSION" -lt 12884 ]; then
             echo "NEED_HOOKS=true" >> $GITHUB_ENV
           else
             echo "NEED_HOOKS=false" >> $GITHUB_ENV
           fi
-          
+
           cd ..
-          KSU_COMMIT_SHA=$(git rev-parse HEAD)
-          echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> $GITHUB_ENV
-          
+          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-          echo "KernelSU Next Version: $KSU_VERSION"
-          echo "✅ KernelSU Next added (commit: ${KSU_COMMIT_SHA:0:8})"
           echo "::endgroup::"
-        
+
       - name: Add KernelSU
         if: ${{ inputs.ksu_type == 'KSU' }}
         shell: bash
@@ -495,27 +496,111 @@ jobs:
           echo "::group::Add KernelSU"
           cd "$OP_MODEL/kernel_platform"
 
-          echo "Adding KernelSU..."
           if [ "${{ inputs.ksu_branch_or_hash }}" = "" ]; then
-            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+            curl --fail --location --proto '=https' -LSs \
+              "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
           else
-            curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
+            curl --fail --location --proto '=https' -LSs \
+              "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "${{ inputs.ksu_branch_or_hash }}"
           fi
+
           git submodule update --init --recursive
           cd KernelSU/kernel
           BASE_VERSION=20000
           KSU_VERSION=$(expr $(/usr/bin/git rev-list --count HEAD) "+" $BASE_VERSION)
           sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" Makefile
-          
           echo "NEED_HOOKS=false" >> $GITHUB_ENV
-          
           cd ..
-          KSU_COMMIT_SHA=$(git rev-parse HEAD)
-          echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> $GITHUB_ENV
-          
+          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-          echo "KernelSU Version: $KSU_VERSION"
-          echo "✅ KernelSU added (commit: ${KSU_COMMIT_SHA:0:8})"
+          echo "::endgroup::"
+
+      - name: Add SukiSU Ultra
+        if: ${{ inputs.ksu_type == 'SUKISU' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Add SukiSU Ultra"
+
+          cd "$OP_MODEL/kernel_platform"
+
+          KSU_META='${{ inputs.KSU_META }}'
+
+          if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 2 ]]; then
+            echo "::error::KSU_META missing required '/', expected: branch/custom_tag(optional)/commit_hash(optional)"
+            echo "::error::Got: $KSU_META"
+            exit 10
+          fi
+
+          IFS='/' read -r BRANCH_NAME CUSTOM_TAG MANUAL_HASH <<< "$KSU_META"
+
+          echo "Branch name: $BRANCH_NAME"
+          [[ -n "$CUSTOM_TAG" ]] && echo "Custom version tag: $CUSTOM_TAG" || echo "Custom version tag: Not enabled"
+          [[ -n "$MANUAL_HASH" ]] && echo "Manually specified hash: $MANUAL_HASH" || echo "Manually specified hash: Not enabled"
+
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
+
+          cd ./KernelSU
+
+          if [[ -n "$MANUAL_HASH" ]]; then
+            git fetch origin "$BRANCH_NAME" --depth=50
+            git checkout "$MANUAL_HASH"
+            SHORT_HASH=${MANUAL_HASH:0:8}
+          fi
+
+          KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$BRANCH_NAME/kernel/Kbuild" | \
+            grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
+
+          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
+            KSU_API_VERSION="3.1.7"
+          fi
+          echo "KSU_API_VERSION=$KSU_API_VERSION" >> $GITHUB_ENV
+
+          GIT_HASH=$(git rev-parse --short HEAD)
+
+          if [[ -n "$MANUAL_HASH" ]]; then
+            USE_HASH="$SHORT_HASH"
+          else
+            USE_HASH="$GIT_HASH"
+          fi
+
+          if [[ -z "$CUSTOM_TAG" ]]; then
+            VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$BRANCH_NAME"
+          else
+            VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$BRANCH_NAME[$USE_HASH]"
+          fi
+
+          sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild
+          sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild
+          sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild
+
+          VERSION_DEFINITIONS=$(cat <<EOF
+          define get_ksu_version_full
+          $VERSION_FULL
+          endef
+
+          KSU_VERSION_API := $KSU_API_VERSION
+          KSU_VERSION_FULL := $VERSION_FULL
+          EOF
+          )
+
+          awk -v def="$VERSION_DEFINITIONS" '
+            /REPO_OWNER :=/ {print; print def; inserted=1; next}
+            1
+            END {if (!inserted) print def}
+          ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
+
+          KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 37185)
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+          echo "NEED_HOOKS=false" >> $GITHUB_ENV
+
+          echo "::group::Final Kbuild preview"
+          grep -A10 "REPO_OWNER" kernel/Kbuild || true
+          grep "KSU_VERSION_FULL" kernel/Kbuild || true
+          echo "::endgroup::"
+
           echo "::endgroup::"
 
       - name: Apply SUSFS Patches
@@ -524,16 +609,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Apply SUSFS patches"
-
           cd "$OP_MODEL/kernel_platform"
 
           PATCH_FILE="../../susfs4ksu/kernel_patches/50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
           if [ ! -f "$PATCH_FILE" ]; then
             echo "::error::Missing SUSFS patch file: $PATCH_FILE"
             echo "SUSFS_KERNEL_BRANCH=$SUSFS_KERNEL_BRANCH"
-            echo "::group::Available patches (sample)"
-            ls -1 ../../susfs4ksu/kernel_patches | sed -n '1,120p' || true
-            echo "::endgroup::"
+            ls -1 ../../susfs4ksu/kernel_patches | sed -n '1,160p' || true
             exit 1
           fi
 
@@ -543,22 +625,52 @@ jobs:
 
           susfs_version="$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')"
           echo "SUSVER=$susfs_version" >> "$GITHUB_ENV"
+          echo "SUSFS version: $susfs_version"
 
           version_lte() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$1" ]; }
           if version_lte "${susfs_version:1}" "1.5.12"; then
             echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
+          else
+            echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
           fi
 
           if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
-            cd ./KernelSU-Next
+            KSU_DIR="./KernelSU-Next"
           else
-            cd ./KernelSU
+            KSU_DIR="./KernelSU"
           fi
 
-          cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
-          patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch || true
+          echo "Applying SUSFS enablement patch to: $KSU_DIR"
+          cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "$KSU_DIR"/
+          ( cd "$KSU_DIR" && patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch ) || true
 
-          cd ../common
+          # Apply SUSFS v2.0.0 fix bundle for all KSU types (KSUN/KSU/SUKISU)
+          if [ "$susfs_version" = "v2.0.0" ]; then
+            FIXDIR="../../../kernel_patches/next/susfs_fix_patches/${susfs_version}"
+            if [ ! -d "$FIXDIR" ]; then
+              echo "::error::Missing fix patch directory: $FIXDIR"
+              ls -1 ../../../kernel_patches/next/susfs_fix_patches | sed -n '1,120p' || true
+              exit 1
+            fi
+
+            echo "Applying SUSFS v2.0.0 fix patches from: $FIXDIR"
+            (
+              cd "$KSU_DIR"
+
+              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \;); do
+                p="$FIXDIR/fix_${file}.patch"
+                if [ -f "$p" ]; then
+                  echo " - patch: $(basename "$p")"
+                  patch -p1 --forward < "$p"
+                fi
+              done
+
+              [ -f "$FIXDIR/overwrite_hook_mode.patch" ] && patch -p1 --forward < "$FIXDIR/overwrite_hook_mode.patch"
+              [ -f "$FIXDIR/ksu_toolkit.patch" ] && patch -p1 --forward < "$FIXDIR/ksu_toolkit.patch"
+            )
+          fi
+
+          cd ./common
           patch -p1 --forward < "$(basename "$PATCH_FILE")"
 
           echo "✅ SUSFS patches applied ($susfs_version)"
@@ -571,11 +683,9 @@ jobs:
           set -euo pipefail
           echo "::group::Add BBG LSM"
           cd "$OP_MODEL/kernel_platform"
-
           if ! wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash -s fix_blkdev_rename; then
             echo "::warning::BBG setup script failed, continuing anyway"
           fi
-
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
           echo "::endgroup::"
@@ -585,18 +695,15 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Apply other patches"
-
           cd "$OP_MODEL/kernel_platform/common"
 
           KERNEL_VERSION="${KERNEL_VER}"
           MIN_PTRACE="5.16"
 
           version_ge() {
-            # returns 0 if $1 >= $2
             [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
           }
 
-          # ptrace patch: apply for kernels >= 5.16 (your intent, fixed)
           if version_ge "$KERNEL_VERSION" "$MIN_PTRACE"; then
             patch -p1 -F 3 --forward < "../../../kernel_patches/gki_ptrace.patch" || true
           fi
@@ -605,7 +712,6 @@ jobs:
           patch -p1 --forward < "../../../kernel_patches/common/file_struct_8bytes_align.patch" || true
           patch -p1 --forward < "../../../kernel_patches/common/reduce_cache_pressure.patch" || true
 
-          # 6.1 split patches: use "6.1+" when kernel >= 6.1 else "6.1-"
           if version_ge "$KERNEL_VERSION" "6.1"; then
             patch -p1 --forward < "../../../kernel_patches/common/clear_page_16bytes_align.patch" || true
             patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1+.patch" || true
@@ -618,13 +724,15 @@ jobs:
 
           echo "::endgroup::"
 
-      - name: Apply KSU Hooks (if needed)
+      - name: Apply KSU Hooks
         if: ${{ env.NEED_HOOKS == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
+          echo "::group::Apply KSU hooks"
           cd "$OP_MODEL/kernel_platform/common"
-          patch -p1 < ../../../kernel_patches/next/scope_min_manual_hooks_v1.4.patch
+          patch -p1 --forward < ../../../kernel_patches/next/scope_min_manual_hooks_v1.4.patch
+          echo "::endgroup::"
 
       - name: Add KSU/SUSFS + features to gki_defconfig
         shell: bash
@@ -702,7 +810,6 @@ jobs:
           CONFIG_OPTIMIZE_INLINING=y
           CONFIG_FRAME_WARN=0
           CONFIG_TRACEPOINTS=y
-
           CONFIG_DEBUG_KERNEL=n
           CONFIG_DEBUG_INFO=n
           CONFIG_GDB_SCRIPTS=n
@@ -741,8 +848,8 @@ jobs:
           KERNEL_PATH="$GITHUB_WORKSPACE/$OP_MODEL/kernel_platform"
           COMMON="$KERNEL_PATH/common"
           cd "$COMMON"
-          : > "$COMMON/.scmversion"
 
+          : > "$COMMON/.scmversion"
           COMMIT_TIMESTAMP=$(git log -1 --format=%ct 2>/dev/null || echo "$(date +%s)")
           COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
@@ -750,7 +857,6 @@ jobs:
           MAP="-fdebug-prefix-map=${WORKSPACE}=."
           MPMAP="-fmacro-prefix-map=${WORKSPACE}=."
           FPMAP="-ffile-prefix-map=${WORKSPACE}=."
-
           export KCFLAGS="${KCFLAGS:-} $MAP $MPMAP $FPMAP -no-canonical-prefixes -fdiagnostics-color=never -Qunused-arguments -Wno-unused-command-line-argument -D__ANDROID_COMMON_KERNEL__"
           export KCPPFLAGS="${KCPPFLAGS:-} $MAP $MPMAP $FPMAP"
 
@@ -794,7 +900,6 @@ jobs:
 
           OUT=out
           mkdir -p "$OUT"
-
           make O="$OUT" gki_defconfig
 
           LOCAL_LOCALVERSION="${CUSTOM_LOCALVERSION:--OP15}"
@@ -886,7 +991,6 @@ jobs:
           cp "$IMAGE_PATH" "$GITHUB_WORKSPACE/AnyKernel3/Image"
 
           cd "$GITHUB_WORKSPACE/AnyKernel3"
-
           if [ "$OP_SUSFS" = "true" ]; then
             ZIP_NAME="AK3_${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_${{ inputs.ksu_type }}_${KSUVER:-unknown}_SuSFS_${SUSVER:-unknown}.zip"
           else
