@@ -226,7 +226,7 @@ jobs:
 
           echo "repo init: $MANIFEST_GIT branch=$MANIFEST_BRANCH manifest=$MANIFEST_FILE"
           "$REPO" init -u "$MANIFEST_GIT" -b "$MANIFEST_BRANCH" -m "$MANIFEST_FILE" \
-            --repo-rev=v2.16 --depth=1 --no-clone-bundle --no-tags
+            --repo-rev=stable --depth=1 --no-clone-bundle --no-tags
 
           success=false
           for i in 1 2 3; do
