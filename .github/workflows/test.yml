@@ -272,8 +272,9 @@ jobs:
           echo "::group::Clone dependencies"
           cd "$GITHUB_WORKSPACE"
 
-          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b gki-2.0
-          git clone --depth=1 https://github.com/Bouteillepleine/kernel_patches.git
+          git clone --depth=1 https://github.com/Bouteillepleine/AnyKernel3.git -b gki-2.0          
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git
+          git clone https://github.com/Numbersf/Action-Build.git
 
           if [ "${OP_SUSFS}" = "true" ]; then
             git clone https://gitlab.com/simonpunk/susfs4ksu.git
