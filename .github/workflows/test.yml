@@ -357,6 +357,71 @@ jobs:
           echo "✅ SukiSU Ultra added (KSUVER=$KSU_VERSION, commit: ${KSU_COMMIT_SHA:0:8})"
           echo "::endgroup::"
 
+      - name: Fix KernelSU ksud.h user_arg_ptr redefinition (6.12)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Fix ksud.h user_arg_ptr"
+          cd "$CONFIG/kernel_platform"
+
+          # Prefer common/ first if present (that’s typically what the kernel build uses)
+          KSUD_PATH="$(find . -path './common/drivers/kernelsu/ksud.h' -print -quit || true)"
+          if [ -z "$KSUD_PATH" ]; then
+            KSUD_PATH="$(find . -path '*/drivers/kernelsu/ksud.h' -print -quit || true)"
+          fi
+
+          if [ -z "$KSUD_PATH" ]; then
+            echo "::error::ksud.h not found"
+            exit 1
+          fi
+
+          echo "Found: $KSUD_PATH"
+          echo "--- occurrences before:"
+          grep -n "struct user_arg_ptr" "$KSUD_PATH" || true
+
+          python3 - "$KSUD_PATH" <<'PY'
+          import re, sys, pathlib
+
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text(encoding="utf-8", errors="ignore").splitlines(True)
+
+          # Locate all "struct user_arg_ptr {" blocks
+          starts = [i for i,l in enumerate(s) if re.match(r'^\s*struct\s+user_arg_ptr\s*\{', l)]
+          if len(starts) <= 1:
+            print("No duplicate struct user_arg_ptr found (or already fixed).")
+            sys.exit(0)
+
+          # Remove subsequent full blocks up to the closing '};'
+          remove_ranges = []
+          for st in starts[1:]:
+            en = st
+            while en < len(s) and not re.match(r'^\s*\};\s*$', s[en]):
+              en += 1
+            if en < len(s):
+              en += 1  # include closing '};'
+            remove_ranges.append((st, en))
+
+          out = []
+          i = 0
+          ri = 0
+          while i < len(s):
+            if ri < len(remove_ranges) and i == remove_ranges[ri][0]:
+              a, b = remove_ranges[ri]
+              out.append("/* removed duplicate struct user_arg_ptr (auto-fix for 6.12 build) */\n")
+              i = b
+              ri += 1
+              continue
+            out.append(s[i])
+            i += 1
+
+          p.write_text("".join(out), encoding="utf-8")
+          print(f"Removed {len(remove_ranges)} duplicate definition(s) from {p}.")
+          PY
+
+          echo "--- occurrences after:"
+          grep -n "struct user_arg_ptr" "$KSUD_PATH" || true
+          echo "::endgroup::"
+
       - name: Apply SUSFS Patches
         shell: bash
         if: ${{ env.OP_SUSFS == 'true' }}
@@ -365,27 +430,35 @@ jobs:
           echo "::group::Apply SUSFS patches"
           cd "$CONFIG/kernel_platform"
 
-          cp ../../susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch ./common/
+          PATCH_FILE="../../susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::SUSFS patch not found: $PATCH_FILE"
+            ls -ლა ../../susfs4ksu/kernel_patches/ || true
+            exit 1
+          fi
+
+          cp "$PATCH_FILE" ./common/
           cp ../../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ../../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
 
           susfs_version=$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')
-          echo "SUSVER=$susfs_version" >> $GITHUB_ENV
+          echo "SUSVER=$susfs_version" >> "$GITHUB_ENV"
+          echo "SUSFS version detected: $susfs_version"
 
-          version_lte() {
-            [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$1" ]
-          }
+          version_lte() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$1" ]; }
           if version_lte "${susfs_version:1}" "1.5.12"; then
-            echo "NEED_HOOKS=true" >> $GITHUB_ENV
+            echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
           else
-            echo "NEED_HOOKS=false" >> $GITHUB_ENV
+            echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
           fi
 
           case "$susfs_version" in
             "v1.5.8"|"v1.5.9"|"v1.5.10"|"v1.5.11"|"v1.5.12"|"v2.0.0")
               cd ./KernelSU
               cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
-              patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch || true
+              echo "Patching KernelSU for SUSFS..."
+              # FAIL if it doesn't apply cleanly
+              patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch
               ;;
             *)
               echo "::error::Unsupported SUSFS version: $susfs_version"
@@ -394,7 +467,12 @@ jobs:
           esac
 
           cd ../common
-          patch -p1 < 50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch
+          echo "Patching kernel tree with SUSFS..."
+          patch -p1 --forward < "50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch" || {
+            echo "::error::SUSFS kernel patch failed. Showing rejects (if any):"
+            find . -name "*.rej" -maxdepth 5 -print -exec sed -n '1,200p' {} \; || true
+            exit 1
+          }
 
           echo "✅ SUSFS patches applied"
           echo "::endgroup::"
