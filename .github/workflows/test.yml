@@ -459,92 +459,93 @@ jobs:
           echo "::group::Kernel config"
           cd "$CONFIG/kernel_platform"
 
-          # NOTE: use <<- to strip *tabs* in heredoc content.
-          cat <<-'EOF' >> common/arch/arm64/configs/gki_defconfig
-          	CONFIG_KSU=y
-          	CONFIG_KSU_KPROBES_HOOK=n
-          	CONFIG_KSU_SUSFS=y
-          	CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-          	CONFIG_KSU_SUSFS_SUS_PATH=y
-          	CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          	CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          	CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          	CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          	CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
-          	CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          	CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
-          	CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          	CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          	CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          	CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          	CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          	CONFIG_KSU_SUSFS_SUS_MAP=y
-          	CONFIG_KSU_SUSFS_SUS_SU=n
-          	CONFIG_TMPFS_XATTR=y
-          	CONFIG_TMPFS_POSIX_ACL=y
+          DEFCONFIG="common/arch/arm64/configs/gki_defconfig"
+
+          cat >> "$DEFCONFIG" <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_KPROBES_HOOK=n
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_TMPFS_POSIX_ACL=y
           EOF
 
           if [ "${OP_BBR}" = "true" ]; then
-            cat <<-'EOF' >> common/arch/arm64/configs/gki_defconfig
-            	CONFIG_TCP_CONG_ADVANCED=y
-            	CONFIG_TCP_CONG_BBR=y
-            	CONFIG_NET_SCH_FQ=y
-            	CONFIG_NET_SCH_FQ_CODEL=y
-            EOF
+            cat >> "$DEFCONFIG" <<'EOF'
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          EOF
           fi
 
           if [ "${OP_TTL}" = "true" ]; then
-            cat <<-'EOF' >> common/arch/arm64/configs/gki_defconfig
-            	CONFIG_IP_NF_TARGET_TTL=y
-            	CONFIG_IP6_NF_TARGET_HL=y
-            	CONFIG_IP6_NF_MATCH_HL=y
-            EOF
+            cat >> "$DEFCONFIG" <<'EOF'
+          CONFIG_IP_NF_TARGET_TTL=y
+          CONFIG_IP6_NF_TARGET_HL=y
+          CONFIG_IP6_NF_MATCH_HL=y
+          EOF
           fi
 
           if [ "${OP_IP_SET}" = "true" ]; then
-            cat <<-'EOF' >> common/arch/arm64/configs/gki_defconfig
-            	CONFIG_IP_SET=y
-            	CONFIG_IP_SET_MAX=65534
-            	CONFIG_IP_SET_BITMAP_IP=y
-            	CONFIG_IP_SET_BITMAP_IPMAC=y
-            	CONFIG_IP_SET_BITMAP_PORT=y
-            	CONFIG_IP_SET_HASH_IP=y
-            	CONFIG_IP_SET_HASH_IPMARK=y
-            	CONFIG_IP_SET_HASH_IPPORT=y
-            	CONFIG_IP_SET_HASH_IPPORTIP=y
-            	CONFIG_IP_SET_HASH_IPPORTNET=y
-            	CONFIG_IP_SET_HASH_IPMAC=y
-            	CONFIG_IP_SET_HASH_MAC=y
-            	CONFIG_IP_SET_HASH_NETPORTNET=y
-            	CONFIG_IP_SET_HASH_NET=y
-            	CONFIG_IP_SET_HASH_NETNET=y
-            	CONFIG_IP_SET_HASH_NETPORT=y
-            	CONFIG_IP_SET_HASH_NETIFACE=y
-            	CONFIG_IP_SET_LIST_SET=y
-            EOF
+            cat >> "$DEFCONFIG" <<'EOF'
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_MAX=65534
+          CONFIG_IP_SET_BITMAP_IP=y
+          CONFIG_IP_SET_BITMAP_IPMAC=y
+          CONFIG_IP_SET_BITMAP_PORT=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_IPMARK=y
+          CONFIG_IP_SET_HASH_IPPORT=y
+          CONFIG_IP_SET_HASH_IPPORTIP=y
+          CONFIG_IP_SET_HASH_IPPORTNET=y
+          CONFIG_IP_SET_HASH_IPMAC=y
+          CONFIG_IP_SET_HASH_MAC=y
+          CONFIG_IP_SET_HASH_NETPORTNET=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_IP_SET_HASH_NETNET=y
+          CONFIG_IP_SET_HASH_NETPORT=y
+          CONFIG_IP_SET_HASH_NETIFACE=y
+          CONFIG_IP_SET_LIST_SET=y
+          EOF
           fi
 
-          cat <<-'EOF' >> common/arch/arm64/configs/gki_defconfig
-          	CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          	CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n
-          	CONFIG_OPTIMIZE_INLINING=y
-          	CONFIG_FRAME_WARN=0
-          	CONFIG_TRACEPOINTS=y
-          	CONFIG_ANDROID_BINDER_IPC_RUST=m
-          	CONFIG_RUST=y
-
-          	# Disable debug-ish options
-          	CONFIG_DEBUG_KERNEL=n
-          	CONFIG_DEBUG_INFO=n
-          	CONFIG_GDB_SCRIPTS=n
-          	CONFIG_LOCK_DEBUGGING=n
-          	CONFIG_DEBUG_MUTEXES=n
-          	CONFIG_DEBUG_SPINLOCK=n
-          	CONFIG_DEBUG_ATOMIC_SLEEP=n
-          	CONFIG_SCHED_DEBUG=n
-          	CONFIG_SCHEDSTATS=n
-          	CONFIG_DEBUG_MISC=n
-          	CONFIG_DEBUG_BUGVERBOSE=n
+          cat >> "$DEFCONFIG" <<'EOF'
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n
+          CONFIG_OPTIMIZE_INLINING=y
+          CONFIG_FRAME_WARN=0
+          CONFIG_TRACEPOINTS=y
+          CONFIG_ANDROID_BINDER_IPC_RUST=m
+          CONFIG_RUST=y
+          
+          # Disable debug-ish options
+          CONFIG_DEBUG_KERNEL=n
+          CONFIG_DEBUG_INFO=n
+          CONFIG_GDB_SCRIPTS=n
+          CONFIG_LOCK_DEBUGGING=n
+          CONFIG_DEBUG_MUTEXES=n
+          CONFIG_DEBUG_SPINLOCK=n
+          CONFIG_DEBUG_ATOMIC_SLEEP=n
+          CONFIG_SCHED_DEBUG=n
+          CONFIG_SCHEDSTATS=n
+          CONFIG_DEBUG_MISC=n
+          CONFIG_DEBUG_BUGVERBOSE=n
           EOF
 
           echo "✅ Kernel configured"
