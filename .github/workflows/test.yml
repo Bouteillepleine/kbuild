@@ -44,7 +44,7 @@ jobs:
       OP_RUST_BUILD: "true"
       OP_HMBIRD: "false"
       OP_SUSFS: "true"
-      OP_BBG: "true"
+      OP_BBG: "false"
       OP_BBR: "true"
       OP_TTL: "true"
       OP_IP_SET: "true"
