@@ -440,17 +440,7 @@ jobs:
             patch -p1 --forward < "../../../kernel_patches/common/unicode_bypass_fix_6.1+.patch"
           fi
 
-          echo "::endgroup::"
-
-      - name: Apply KSU Hooks
-        shell: bash
-        if: ${{ env.NEED_HOOKS == 'true' }}
-        run: |
-          set -euo pipefail
-          echo "::group::Apply KSU hooks"
-          cd "$CONFIG/kernel_platform/common"
-          patch -p1 < ../../../kernel_patches/next/scope_min_manual_hooks_v1.4.patch
-          echo "::endgroup::"
+          echo "::endgroup::"      
 
       - name: Add SukiSU + SUSFS config (gki_defconfig)
         shell: bash
@@ -458,95 +448,85 @@ jobs:
           set -euo pipefail
           echo "::group::Kernel config"
           cd "$CONFIG/kernel_platform"
-
           DEFCONFIG="common/arch/arm64/configs/gki_defconfig"
 
-          cat >> "$DEFCONFIG" <<'EOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_KPROBES_HOOK=n
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          CONFIG_KSU_SUSFS_SUS_SU=n
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          EOF
+          add_cfg() { echo "$1" >> "$DEFCONFIG"; }
+
+          add_cfg "CONFIG_KSU=y"
+          add_cfg "CONFIG_KSU_KPROBES_HOOK=n"
+          add_cfg "CONFIG_KSU_SUSFS=y"
+          add_cfg "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y"
+          add_cfg "CONFIG_KSU_SUSFS_SUS_PATH=y"
+          add_cfg "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
+          add_cfg "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y"
+          add_cfg "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y"
+          add_cfg "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
+          add_cfg "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n"
+          add_cfg "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
+          add_cfg "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y"
+          add_cfg "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
+          add_cfg "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
+          add_cfg "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
+          add_cfg "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
+          add_cfg "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
+          add_cfg "CONFIG_KSU_SUSFS_SUS_MAP=y"
+          add_cfg "CONFIG_KSU_SUSFS_SUS_SU=n"
+          add_cfg "CONFIG_TMPFS_XATTR=y"
+          add_cfg "CONFIG_TMPFS_POSIX_ACL=y"
 
           if [ "${OP_BBR}" = "true" ]; then
-            cat >> "$DEFCONFIG" <<'EOF'
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          EOF
+            add_cfg "CONFIG_TCP_CONG_ADVANCED=y"
+            add_cfg "CONFIG_TCP_CONG_BBR=y"
+            add_cfg "CONFIG_NET_SCH_FQ=y"
+            add_cfg "CONFIG_NET_SCH_FQ_CODEL=y"
           fi
 
           if [ "${OP_TTL}" = "true" ]; then
-            cat >> "$DEFCONFIG" <<'EOF'
-          CONFIG_IP_NF_TARGET_TTL=y
-          CONFIG_IP6_NF_TARGET_HL=y
-          CONFIG_IP6_NF_MATCH_HL=y
-          EOF
+            add_cfg "CONFIG_IP_NF_TARGET_TTL=y"
+            add_cfg "CONFIG_IP6_NF_TARGET_HL=y"
+            add_cfg "CONFIG_IP6_NF_MATCH_HL=y"
           fi
 
           if [ "${OP_IP_SET}" = "true" ]; then
-            cat >> "$DEFCONFIG" <<'EOF'
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_MAX=65534
-          CONFIG_IP_SET_BITMAP_IP=y
-          CONFIG_IP_SET_BITMAP_IPMAC=y
-          CONFIG_IP_SET_BITMAP_PORT=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_IPMARK=y
-          CONFIG_IP_SET_HASH_IPPORT=y
-          CONFIG_IP_SET_HASH_IPPORTIP=y
-          CONFIG_IP_SET_HASH_IPPORTNET=y
-          CONFIG_IP_SET_HASH_IPMAC=y
-          CONFIG_IP_SET_HASH_MAC=y
-          CONFIG_IP_SET_HASH_NETPORTNET=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_IP_SET_HASH_NETNET=y
-          CONFIG_IP_SET_HASH_NETPORT=y
-          CONFIG_IP_SET_HASH_NETIFACE=y
-          CONFIG_IP_SET_LIST_SET=y
-          EOF
+            add_cfg "CONFIG_IP_SET=y"
+            add_cfg "CONFIG_IP_SET_MAX=65534"
+            add_cfg "CONFIG_IP_SET_BITMAP_IP=y"
+            add_cfg "CONFIG_IP_SET_BITMAP_IPMAC=y"
+            add_cfg "CONFIG_IP_SET_BITMAP_PORT=y"
+            add_cfg "CONFIG_IP_SET_HASH_IP=y"
+            add_cfg "CONFIG_IP_SET_HASH_IPMARK=y"
+            add_cfg "CONFIG_IP_SET_HASH_IPPORT=y"
+            add_cfg "CONFIG_IP_SET_HASH_IPPORTIP=y"
+            add_cfg "CONFIG_IP_SET_HASH_IPPORTNET=y"
+            add_cfg "CONFIG_IP_SET_HASH_IPMAC=y"
+            add_cfg "CONFIG_IP_SET_HASH_MAC=y"
+            add_cfg "CONFIG_IP_SET_HASH_NETPORTNET=y"
+            add_cfg "CONFIG_IP_SET_HASH_NET=y"
+            add_cfg "CONFIG_IP_SET_HASH_NETNET=y"
+            add_cfg "CONFIG_IP_SET_HASH_NETPORT=y"
+            add_cfg "CONFIG_IP_SET_HASH_NETIFACE=y"
+            add_cfg "CONFIG_IP_SET_LIST_SET=y"
           fi
 
-          cat >> "$DEFCONFIG" <<'EOF'
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-          CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n
-          CONFIG_OPTIMIZE_INLINING=y
-          CONFIG_FRAME_WARN=0
-          CONFIG_TRACEPOINTS=y
-          CONFIG_ANDROID_BINDER_IPC_RUST=m
-          CONFIG_RUST=y
-          
-          # Disable debug-ish options
-          CONFIG_DEBUG_KERNEL=n
-          CONFIG_DEBUG_INFO=n
-          CONFIG_GDB_SCRIPTS=n
-          CONFIG_LOCK_DEBUGGING=n
-          CONFIG_DEBUG_MUTEXES=n
-          CONFIG_DEBUG_SPINLOCK=n
-          CONFIG_DEBUG_ATOMIC_SLEEP=n
-          CONFIG_SCHED_DEBUG=n
-          CONFIG_SCHEDSTATS=n
-          CONFIG_DEBUG_MISC=n
-          CONFIG_DEBUG_BUGVERBOSE=n
-          EOF
+          add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y"
+          add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n"
+          add_cfg "CONFIG_OPTIMIZE_INLINING=y"
+          add_cfg "CONFIG_FRAME_WARN=0"
+          add_cfg "CONFIG_TRACEPOINTS=y"
+          add_cfg "CONFIG_ANDROID_BINDER_IPC_RUST=m"
+          add_cfg "CONFIG_RUST=y"
+
+          add_cfg "CONFIG_DEBUG_KERNEL=n"
+          add_cfg "CONFIG_DEBUG_INFO=n"
+          add_cfg "CONFIG_GDB_SCRIPTS=n"
+          add_cfg "CONFIG_LOCK_DEBUGGING=n"
+          add_cfg "CONFIG_DEBUG_MUTEXES=n"
+          add_cfg "CONFIG_DEBUG_SPINLOCK=n"
+          add_cfg "CONFIG_DEBUG_ATOMIC_SLEEP=n"
+          add_cfg "CONFIG_SCHED_DEBUG=n"
+          add_cfg "CONFIG_SCHEDSTATS=n"
+          add_cfg "CONFIG_DEBUG_MISC=n"
+          add_cfg "CONFIG_DEBUG_BUGVERBOSE=n"
 
           echo "✅ Kernel configured"
           echo "::endgroup::"
