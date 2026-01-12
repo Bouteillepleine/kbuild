@@ -358,59 +358,129 @@ jobs:
           echo "✅ SukiSU Ultra added (KSUVER=$KSU_VERSION, commit: ${KSU_COMMIT_SHA:0:8})"
           echo "::endgroup::"
       
-      - name: Apply SUSFS Patches
+      - name: Apply Patches SukiSU Ultra
         shell: bash
-        if: ${{ env.OP_SUSFS == 'true' }}
         run: |
           set -euo pipefail
-          echo "::group::Apply SUSFS patches"
+          echo "::group::Apply SukiSU Ultra patches"
+      
           cd "$CONFIG/kernel_platform"
-
-          PATCH_FILE="../../susfs4ksu/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
-          if [ ! -f "$PATCH_FILE" ]; then
-            echo "::error::SUSFS patch not found: $PATCH_FILE"
-            ls -ლა ../../susfs4ksu/kernel_patches/ || true
-            exit 1
-          fi
-
-          cp "$PATCH_FILE" ./common/
-          cp ../../susfs4ksu/kernel_patches/fs/* ./common/fs/
-          cp ../../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-
-          susfs_version=$(grep '#define SUSFS_VERSION' ./common/include/linux/susfs.h | awk -F'"' '{print $2}')
-          echo "SUSVER=$susfs_version" >> "$GITHUB_ENV"
-          echo "SUSFS version detected: $susfs_version"
-
-          version_lte() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$1" ]; }
-          if version_lte "${susfs_version:1}" "1.5.12"; then
-            echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
-          else
-            echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
-          fi
-
-          case "$susfs_version" in
-            "v1.5.8"|"v1.5.9"|"v1.5.10"|"v1.5.11"|"v1.5.12"|"v2.0.0")
-              cd ./KernelSU
-              cp ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./
-              echo "Patching KernelSU for SUSFS..."
-              # FAIL if it doesn't apply cleanly
-              patch -p1 --forward --fuzz=3 < 10_enable_susfs_for_ksu.patch
-              ;;
-            *)
-              echo "::error::Unsupported SUSFS version: $susfs_version"
+      
+          # ===== SUSFS PATCHES =====
+          if [ "${OP_SUSFS}" = "true" ]; then
+            SUSFS_INPUT="${{ inputs.susfs_branch }}"
+            if [ -z "$SUSFS_INPUT" ]; then
+              SUSFS_INPUT="${SUSFS_KERNEL_BRANCH}"   # ex: gki-android16-6.12
+            fi
+      
+            echo "Using SUSFS ref: $SUSFS_INPUT"
+      
+            if [ ! -d "$GITHUB_WORKSPACE/susfs4ksu/.git" ]; then
+              echo "::error::susfs4ksu repo not found (expected at $GITHUB_WORKSPACE/susfs4ksu)"
               exit 1
-              ;;
-          esac
-
-          cd ../common
-          echo "Patching kernel tree with SUSFS..."
-          patch -p1 --forward < "50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch" || {
-            echo "::error::SUSFS kernel patch failed. Showing rejects (if any):"
-            find . -name "*.rej" -maxdepth 5 -print -exec sed -n '1,200p' {} \; || true
-            exit 1
-          }
-
-          echo "✅ SUSFS patches applied"
+            fi
+      
+            cd "$GITHUB_WORKSPACE/susfs4ksu"
+      
+            # Try remote branch first (fetch it), else try commit/tag
+            git fetch --depth=50 origin "$SUSFS_INPUT" 2>/dev/null || true
+      
+            if git show-ref --verify --quiet "refs/remotes/origin/$SUSFS_INPUT"; then
+              git checkout -B "$SUSFS_INPUT" "origin/$SUSFS_INPUT"
+            elif git rev-parse --verify "$SUSFS_INPUT^{commit}" >/dev/null 2>&1; then
+              git checkout "$SUSFS_INPUT"
+            else
+              echo "::error::SUSFS branch/commit not found: $SUSFS_INPUT"
+              echo "Some remote branches:"
+              git branch -r | head -30 || true
+              echo "Some tags:"
+              git tag -l | head -30 || true
+              exit 1
+            fi
+      
+            SUSFS_COMMIT="$(git rev-parse HEAD)"
+            SUSFS_BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
+            echo "SUSFS_COMMIT_SHA=$SUSFS_COMMIT" >> "$GITHUB_ENV"
+            echo "SUSFS_BRANCH_NAME=$SUSFS_BRANCH_NAME" >> "$GITHUB_ENV"
+            echo "✅ SUSFS commit: $SUSFS_COMMIT ($SUSFS_BRANCH_NAME)"
+      
+            # Back to kernel tree
+            cd "$CONFIG/kernel_platform"
+      
+            PATCH_NAME="50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
+            PATCH_SRC="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/$PATCH_NAME"
+      
+            if [ ! -f "$PATCH_SRC" ]; then
+              echo "::error::Missing SUSFS patch: $PATCH_SRC"
+              echo "Available patches:"
+              ls -la "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/" || true
+              exit 1
+            fi
+      
+            cp "$PATCH_SRC" ./common/
+      
+            # Require expected files
+            if ! ls "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/"* >/dev/null 2>&1; then
+              echo "::error::No SUSFS fs/ files found in susfs4ksu (wrong ref?)"
+              exit 1
+            fi
+            if ! ls "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/"* >/dev/null 2>&1; then
+              echo "::error::No SUSFS include/linux/ files found in susfs4ksu (wrong ref?)"
+              exit 1
+            fi
+      
+            cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/"* ./common/fs/
+            cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/"* ./common/include/linux/
+      
+            echo "✅ SUSFS files copied"
+          fi
+      
+          # ===== KERNEL VERSION DETECTION =====
+          cd "$CONFIG/kernel_platform/common"
+          SUBLEVEL="$(awk -F= '/^SUBLEVEL[[:space:]]*=/ {gsub(/[[:space:]]/,"",$2); print $2; exit}' Makefile)"
+          echo "Detected SUBLEVEL=$SUBLEVEL for ${OP_ANDROID_VERSION}-${OP_KERNEL_VERSION}"
+      
+          # ===== LEGACY FIX (5.15 < 123) =====
+          if [ "${OP_ANDROID_VERSION}" = "android13" ] && \
+             [ "${OP_KERNEL_VERSION}" = "5.15" ] && \
+             [ "${SUBLEVEL:-0}" -lt 123 ]; then
+      
+            echo "Applying fix_5.15.legacy patch..."
+            LEGACY_PATCH="$GITHUB_WORKSPACE/Action-Build/patches/fix_5.15.legacy"
+      
+            if [ ! -f "$LEGACY_PATCH" ]; then
+              echo "::error::Legacy patch not found: $LEGACY_PATCH"
+              exit 1
+            fi
+      
+            cp "$LEGACY_PATCH" ./fix_5.15.legacy.patch
+            patch -p1 --forward < fix_5.15.legacy.patch || {
+              echo "::error::fix_5.15.legacy patch failed"
+              find . -name "*.rej" -maxdepth 6 -print -exec sed -n '1,160p' {} \; || true
+              exit 1
+            }
+            echo "✅ Legacy fix applied"
+          fi
+      
+          # ===== APPLY SUSFS KERNEL PATCH =====
+          if [ "${OP_SUSFS}" = "true" ]; then
+            echo "Applying SUSFS kernel patch..."
+            PATCH_NAME="50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
+      
+            if [ ! -f "$PATCH_NAME" ]; then
+              echo "::error::SUSFS patch not found in common/: $PATCH_NAME"
+              ls -la . | grep -i susfs || true
+              exit 1
+            fi
+      
+            patch -p1 --forward < "$PATCH_NAME" || {
+              echo "::error::SUSFS kernel patch failed: $PATCH_NAME"
+              find . -name "*.rej" -maxdepth 6 -print -exec sed -n '1,200p' {} \; || true
+              exit 1
+            }
+            echo "✅ SUSFS kernel patch applied"
+          fi
+      
           echo "::endgroup::"
 
       - name: Add BBG
