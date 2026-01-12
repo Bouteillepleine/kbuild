@@ -88,18 +88,25 @@ jobs:
           echo "✅ Dependencies installed"
           echo "::endgroup::"
 
-      - name: 🦀 Install Rust bindgen
-        if: ${{ env.OP_RUST_BUILD == 'true' }}
+      - name: Install bindgen only (no rustc)
         shell: bash
+        if: ${{ env.OP_RUST_BUILD == 'true' }}
         run: |
-          set -euo pipefail
-          echo "::group::Install Rust bindgen"
+          # Install bindgen via cargo (no full rustc needed)
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          source "$HOME/.cargo/env"
+          source $HOME/.cargo/env
+          
+          # Install bindgen CLI only (~50-100MB total)
           cargo install bindgen-cli --version 0.69.5
+          
+          # Verify
           bindgen --version
-          echo "✅ Rust bindgen installed"
-          echo "::endgroup::"
+          which bindgen
+
+      - name: Show bindgen version
+        shell: bash
+        if: ${{ env.OP_RUST_BUILD == 'true' }}
+        run: bindgen --version
 
       - name: 🔧 Setup Environment
         shell: bash
