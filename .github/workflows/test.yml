@@ -10,7 +10,7 @@ on:
         description: 'SukiSU: branch(required)/custom_tag(optional)/commit_hash(optional)'
         required: true
         type: string
-        default: "builtin/⚡Ultra⚡/"
+        default: "tmp-builtin/⚡Ultra⚡/"
 
       susfs_branch:
         description: 'SUSFS branch/commit (empty = auto: gki-android16-6.12)'
