@@ -11,7 +11,7 @@ on:
         description: 'SukiSU: branch(required)/custom_tag(optional)/commit_hash(optional)'
         required: true
         type: string
-        default: "tmp-builtin/⚡Ultra⚡/"
+        default: "builtin/⚡Ultra⚡/"
 
       susfs_branch:
         description: 'SUSFS branch/commit (empty = auto: gki-android16-6.12)'
@@ -28,12 +28,7 @@ on:
         description: 'Clean build (no ccache)'
         type: boolean
         default: false
-
-      enable_zram:
-        description: 'Enable ZRAM patches'
-        type: boolean
-        default: false
-
+      
 jobs:
   build-op15:
     runs-on: ubuntu-latest
