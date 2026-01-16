@@ -406,9 +406,9 @@ jobs:
             KSU_API_VERSION=$(grep -m1 "KSU_VERSION_API :=" kernel/Makefile | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
           fi
           
-          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
-            echo "Warning: Invalid or missing API version. Using default: 3.1.7"
-            KSU_API_VERSION="3.1.7"
+          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "4.1.0" | sort -V | head -n1)" != "4.1.0" ]]; then
+            echo "Warning: Invalid or missing API version. Using default: 4.1.0"
+            KSU_API_VERSION="4.1.0"
           fi
       
           echo "KSU API Version: $KSU_API_VERSION"
@@ -497,15 +497,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/$SUSFS_PATCH" ./common/
           cp -r "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/"* ./common/fs/
           cp -r "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/"* ./common/include/linux/
-          
-          if [ "${{ inputs.enable_zram }}" = "true" ]; then
-            echo "Copying ZRAM source files..."
-            cp -r "$GITHUB_WORKSPACE/SukiSU_patch/other/zram/lz4k/include/linux/"* ./common/include/linux/
-            cp -r "$GITHUB_WORKSPACE/SukiSU_patch/other/zram/lz4k/lib/"* ./common/lib/
-            cp -r "$GITHUB_WORKSPACE/SukiSU_patch/other/zram/lz4k/crypto/"* ./common/crypto/
-            cp -r "$GITHUB_WORKSPACE/SukiSU_patch/other/zram/lz4k_oplus" ./common/lib/
-          fi
-          
+                    
           cd ./common
           
           if [ -f "./include/linux/susfs.h" ]; then
@@ -618,52 +610,7 @@ jobs:
           
           echo "✅ SUSFS patches applied: ${SUSFS_VERSION:-unknown}"
           echo "::endgroup::"
-  
-      - name: Apply Hide Stuff Patches
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "::group::Apply hide stuff patches"
-          COMMON_DIR="$GITHUB_WORKSPACE/$CONFIG/kernel_platform/common"
-          PATCH_DIR="$GITHUB_WORKSPACE/SukiSU_patch"
-          
-          cd "$COMMON_DIR"
-          
-          if [ ! -f "$PATCH_DIR/69_hide_stuff.patch" ]; then
-            echo "::error::Hide stuff patch not found at: $PATCH_DIR/69_hide_stuff.patch"
-            exit 1
-          fi
-          
-          cp "$PATCH_DIR/69_hide_stuff.patch" ./
-          echo "Applying hide stuff patch..."
-          if patch -p1 -F 3 < 69_hide_stuff.patch; then
-            echo "✅ Hide stuff patch applied successfully"
-          else
-            echo "::warning::Hide stuff patch applied with warnings"
-          fi
-          
-          echo "✅ Hide stuff patches applied"
-          echo "::endgroup::"
-  
-      - name: Patch KernelSU sulog time64_to_tm clash
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "::group::Patch KernelSU sulog compatibility"
-          KSP="$GITHUB_WORKSPACE/$CONFIG/kernel_platform/common"
-          f="$KSP/drivers/kernelsu/sulog.c"
-          
-          if [ -f "$f" ] && grep -q 'static inline void time64_to_tm' "$f"; then
-            echo "Found time64_to_tm conflict in sulog.c, applying patch..."
-            sed -i 's/static inline void time64_to_tm/static inline void ksu_time64_to_tm/' "$f"
-            sed -i 's/time64_to_tm(/ksu_time64_to_tm(/g' "$f"
-            echo "✅ Patched sulog.c to avoid time64_to_tm conflict"
-            echo "   Renamed: time64_to_tm → ksu_time64_to_tm"
-          else
-            echo "ℹ️ No local time64_to_tm helper found in $f; nothing to patch"
-          fi
-          echo "::endgroup::"
-
+       
       - name: Add BBG
         if: ${{ env.OP_BBG == 'true' }}
         shell: bash
