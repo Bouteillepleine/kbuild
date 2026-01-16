@@ -28,7 +28,7 @@ on:
         description: 'Clean build (no ccache)'
         type: boolean
         default: false
-      
+
 jobs:
   build-op15:
     runs-on: ubuntu-latest
@@ -95,11 +95,11 @@ jobs:
         run: |
           # Install bindgen via cargo (no full rustc needed)
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-          source $HOME/.cargo/env
-          
-          # Install bindgen CLI only (~50-100MB total)
+          source "$HOME/.cargo/env"
+
+          # Install bindgen CLI only
           cargo install bindgen-cli --version 0.69.5
-          
+
           # Verify
           bindgen --version
           which bindgen
@@ -325,37 +325,37 @@ jobs:
           set -euo pipefail
           echo "::group::Add SukiSU Ultra"
           cd "$CONFIG/kernel_platform"
-      
+
           META="${{ inputs.ksu_meta }}"
           if [[ "$(grep -o '/' <<< "$META" | wc -l)" -lt 2 ]]; then
             echo "::error::Invalid 'ksu_meta' format. Expected: branch/custom_tag/commit_hash"
             echo "Example: susfs-main/Ultra/abc12345"
             exit 1
           fi
-      
+
           IFS='/' read -r BRANCH_NAME CUSTOM_TAG MANUAL_HASH <<< "$META"
-      
+
           echo "Branch: $BRANCH_NAME"
           echo "Custom Tag: ${CUSTOM_TAG:-Not set}"
           echo "Manual Commit: ${MANUAL_HASH:-Not set}"
-      
+
           echo "Downloading KernelSU setup script..."
           if ! curl -LSs --retry 3 --retry-delay 2 --connect-timeout 30 \
                "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"; then
             echo "::error::KernelSU setup script failed"
             exit 1
           fi
-      
+
           if [ ! -d "./KernelSU" ]; then
             echo "::error::KernelSU directory was not created after setup"
             ls -la
             exit 1
           fi
-      
+
           cd ./KernelSU
 
           echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-      
+
           if [[ -n "$MANUAL_HASH" ]]; then
             echo "Checking out specified commit: $MANUAL_HASH"
             if ! git fetch origin "$BRANCH_NAME" --depth=50; then
@@ -369,15 +369,15 @@ jobs:
             SHORT_HASH="${MANUAL_HASH:0:8}"
             echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           fi
-      
+
           echo "::group::Fix sulog.c missing linux/version.h"
           SULOG_PATH="./kernel/sulog.c"
-          
+
           if [ -f "$SULOG_PATH" ]; then
             if ! grep -q '#include <linux/version.h>' "$SULOG_PATH"; then
               echo "Patching sulog.c to include linux/version.h..."
               sed -i '0,/^#include/s|^\(#include.*\)$|\1\n#include <linux/version.h>|' "$SULOG_PATH"
-              
+
               if grep -q '#include <linux/version.h>' "$SULOG_PATH"; then
                 echo "✅ Successfully added linux/version.h to sulog.c"
               else
@@ -391,44 +391,44 @@ jobs:
             echo "⚠️ Warning: sulog.c not found at $SULOG_PATH"
           fi
           echo "::endgroup::"
-      
+
           echo "Determining KSU API version..."
           KSU_API_VERSION=$(curl -fsSL --retry 3 --connect-timeout 30 \
             "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$BRANCH_NAME/kernel/Makefile" 2>/dev/null | \
             grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
-          
+
           if [[ -z "$KSU_API_VERSION" ]] && [ -f "kernel/Makefile" ]; then
             KSU_API_VERSION=$(grep -m1 "KSU_VERSION_API :=" kernel/Makefile | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
           fi
-          
+
           if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "4.1.0" | sort -V | head -n1)" != "4.1.0" ]]; then
             echo "Warning: Invalid or missing API version. Using default: 4.1.0"
             KSU_API_VERSION="4.1.0"
           fi
-      
+
           echo "KSU API Version: $KSU_API_VERSION"
           echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
-      
+
           GIT_HASH=$(git rev-parse --short HEAD)
           echo "GIT_HASH=$GIT_HASH"
-      
+
           if [[ -n "$MANUAL_HASH" ]]; then
             USE_HASH="$SHORT_HASH"
           else
             USE_HASH="$GIT_HASH"
           fi
-          
+
           if [[ -z "$CUSTOM_TAG" ]]; then
             VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$BRANCH_NAME"
           else
             VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$BRANCH_NAME[$USE_HASH]"
           fi
-      
+
           echo "Injecting version info into kernel/Makefile..."
           sed -i '/define get_ksu_version_full/,/endef/d' kernel/Makefile
           sed -i '/KSU_VERSION_API :=/d' kernel/Makefile
           sed -i '/KSU_VERSION_FULL :=/d' kernel/Makefile
-      
+
           VERSION_DEFINITIONS=$(cat <<EOF
             define get_ksu_version_full
             $VERSION_FULL
@@ -438,23 +438,23 @@ jobs:
             KSU_VERSION_FULL := $VERSION_FULL
           EOF
           )
-      
+
           awk -v def="$VERSION_DEFINITIONS" '
             /REPO_OWNER :=/ {print; print def; inserted=1; next}
             1
             END {if (!inserted) print def}
           ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
-      
+
           KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 37185)
-          echo "SUKISUVER=$KSU_VERSION" >> "$GITHUB_ENV"
-      
+          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
+
           echo "::group::Makefile Version Preview"
           echo "Full Version: $VERSION_FULL"
           echo "Manager Version: $KSU_VERSION"
           grep -A10 "REPO_OWNER" kernel/Makefile || true
           grep "KSU_VERSION_FULL" kernel/Makefile || true
           echo "::endgroup::"
-      
+
           echo "✅ SukiSU Ultra successfully added"
           echo "   Version: $VERSION_FULL"
           echo "   Manager: v$KSU_VERSION"
@@ -467,7 +467,6 @@ jobs:
           echo "::group::Apply SUSFS patches"
           cd "$GITHUB_WORKSPACE"
 
-          # Reuse clones from "📦 Clone Dependencies"
           if [ ! -d "$GITHUB_WORKSPACE/susfs4ksu" ]; then
             echo "::error::susfs4ksu directory not found (expected from Clone Dependencies step)"
             exit 1
@@ -476,35 +475,35 @@ jobs:
             echo "::error::SukiSU_patch directory not found (expected from Clone Dependencies step)"
             exit 1
           fi
-          
+
           cd "$CONFIG/kernel_platform"
-          
+
           echo "Copying SUSFS files..."
           SUSFS_PATCH="50_add_susfs_in_gki-${{ env.ANDROID_VER }}-${{ env.KERNEL_VER }}.patch"
-          
+
           if [ ! -f "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/$SUSFS_PATCH" ]; then
             echo "::error::SUSFS patch not found: $SUSFS_PATCH"
             echo "Available patches:"
             ls -la "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/" || true
             exit 1
           fi
-          
+
           cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/$SUSFS_PATCH" ./common/
           cp -r "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/"* ./common/fs/
           cp -r "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/"* ./common/include/linux/
-                    
+
           cd ./common
-          
+
           if [ -f "./include/linux/susfs.h" ]; then
             SUSFS_VERSION=$(grep '#define SUSFS_VERSION' ./include/linux/susfs.h | awk -F'"' '{print $2}')
-            echo "SUSFS_VERSION=$SUSFS_VERSION" >> $GITHUB_ENV
-            echo "SUSVER=$SUSFS_VERSION" >> $GITHUB_ENV
+            echo "SUSFS_VERSION=$SUSFS_VERSION" >> "$GITHUB_ENV"
+            echo "SUSVER=$SUSFS_VERSION" >> "$GITHUB_ENV"
             echo "Detected SUSFS version: $SUSFS_VERSION"
           fi
-          
+
           GKI_V="${{ env.ANDROID_VER }}-${{ env.KERNEL_VER }}"
           SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
-          
+
           if [ "$GKI_V" = "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
             echo "Fixing legacy 5.15 issues (SUBLEVEL=$SUBLEVEL)..."
             if curl -Lo fix_5.15.legacy.patch --retry 5 --retry-delay 2 --retry-connrefused \
@@ -518,18 +517,18 @@ jobs:
               echo "::warning::Failed to download 5.15 legacy patch"
             fi
           fi
-          
+
           KERNEL_VERSION="${{ env.KERNEL_VER }}"
           TKERNEL_VERSION="${{ env.TKERNEL_VER }}"
           TRUSTY_EXISTS="false"
-          
+
           if [[ "$KERNEL_VERSION" == "6.6" ]] || [[ "$KERNEL_VERSION" == "6.12" ]]; then
             if [ -f "$GITHUB_WORKSPACE/$CONFIG/.repo/manifests_fallback/$OP_MANIFEST" ]; then
               if grep -q 'common-modules/trusty' "$GITHUB_WORKSPACE/$CONFIG/.repo/manifests_fallback/$OP_MANIFEST" 2>/dev/null; then
                 TRUSTY_EXISTS="true"
               fi
             fi
-            
+
             if [[ "$KERNEL_VERSION" == "6.12" ]]; then
               if [[ "$TRUSTY_EXISTS" == "false" && "$(printf '%s\n' "$TKERNEL_VERSION" "6.12.0" | sort -V | head -n1)" = "$TKERNEL_VERSION" ]]; then
                 echo "Fixing SUSFS for 6.12 without Trusty OS..."
@@ -544,68 +543,69 @@ jobs:
               fi
             fi
           fi
-          
+
           fake_patched=0
-          
+
           if [ "$GKI_V" = "android16-6.12" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
               echo "Applying fake patch for android16-6.12"
-              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' \
-                     -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \\= __PAGE_SIZE \\/ PAGE_SIZE;' \
+                     -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \\*res = NULL;' ./fs/proc/task_mmu.c
               fake_patched=1
             fi
           fi
-          
+
           if [ "$GKI_V" = "android15-6.6" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
               echo "Applying fake patch for android15-6.6"
-              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' \
-                     -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \\= __PAGE_SIZE \\/ PAGE_SIZE;' \
+                     -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \\*res = NULL;' ./fs/proc/task_mmu.c
               fake_patched=1
             fi
           fi
-          
+
           if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ]; then
             if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
               echo "Fake patch needed for $GKI_V"
               fake_patched=1
             fi
           fi
-          
+
           echo "Applying SUSFS patch: $SUSFS_PATCH"
           if patch -p1 < "$SUSFS_PATCH"; then
             echo "✅ SUSFS patch applied successfully"
           else
             echo "::warning::SUSFS patch applied with warnings"
           fi
-          
+
           if [ "$fake_patched" = 1 ]; then
             echo "Reverting fake patches..."
-            
+
             if [ "$GKI_V" = "android16-6.12" ]; then
               if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
                 echo "Reverting fake patch for android16-6.12"
-                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' \
-                       -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+                sed -i -e '/unsigned int nr_subpages \\= __PAGE_SIZE \\/ PAGE_SIZE;/d' \
+                       -e '/pagemap_entry_t \\*res = NULL;/d' ./fs/proc/task_mmu.c
               fi
             fi
-            
+
             if [ "$GKI_V" = "android15-6.6" ]; then
               if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' \
-                       -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+                sed -i -e '/unsigned int nr_subpages \\= __PAGE_SIZE \\/ PAGE_SIZE;/d' \
+                       -e '/pagemap_entry_t \\*res = NULL;/d' ./fs/proc/task_mmu.c
               fi
             fi
+
             if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ]; then
               if grep -qxF $'\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
                 sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
               fi
             fi
           fi
-          
+
           echo "✅ SUSFS patches applied: ${SUSFS_VERSION:-unknown}"
           echo "::endgroup::"
-       
+
       - name: Add BBG
         if: ${{ env.OP_BBG == 'true' }}
         shell: bash
@@ -616,10 +616,10 @@ jobs:
           if ! wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash -s fix_blkdev_rename; then
             echo "::warning::BBG setup script failed, continuing anyway"
           fi
-          echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
+          grep -qxF "CONFIG_BBG=y" common/arch/arm64/configs/gki_defconfig || echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
           echo "::endgroup::"
-      
+
       - name: Add SukiSU + SUSFS config (gki_defconfig)
         shell: bash
         run: |
@@ -628,7 +628,7 @@ jobs:
           cd "$CONFIG/kernel_platform"
           DEFCONFIG="common/arch/arm64/configs/gki_defconfig"
 
-          add_cfg() { echo "$1" >> "$DEFCONFIG"; }
+          add_cfg() { grep -qxF "$1" "$DEFCONFIG" || echo "$1" >> "$DEFCONFIG"; }
 
           add_cfg "CONFIG_KSU=y"
           add_cfg "CONFIG_KSU_KPROBES_HOOK=n"
@@ -809,7 +809,9 @@ jobs:
 
           echo "IMAGE_SHA256=$(sha256sum "$IMG" | awk '{print $1}')" >> "$GITHUB_ENV"
           echo "KERNEL_UNAME=$(strings "$IMG" | grep -E 'Linux version.*#' | tail -n1)" >> "$GITHUB_ENV"
-          echo "WARNINGS_COUNT=$(grep -ciE '\bwarning:' build.log || echo 0)" >> "$GITHUB_ENV"
+
+          WARNINGS_COUNT="$(grep -ciE '\bwarning:' build.log || true)"
+          echo "WARNINGS_COUNT=${WARNINGS_COUNT:-0}" >> "$GITHUB_ENV"
 
           echo "::endgroup::"
 
