@@ -622,22 +622,32 @@ jobs:
           echo "::group::📊 Build Statistics"
           KP="${{ env.CONFIG }}"
 
+          # Check most likely locations first
           CANDIDATES=(
+            "$KP/bazel-bin/common/kernel_aarch64_dist/Image"
             "$KP/bazel-bin/common/kernel_aarch64/Image"
             "$KP/out/android16-6.12/dist/Image"
             "$KP/common/out/arch/arm64/boot/Image"
-            "$(find "$KP/bazel-bin" -name "Image" -type f 2>/dev/null | head -n1)"
-            "$(find "$KP/out" -name "Image" -type f 2>/dev/null | head -n1)"
-            "$(find "$KP/common/out" -name "Image" -type f 2>/dev/null | head -n1)"
           )
 
           IMAGE_PATH=""
           for p in "${CANDIDATES[@]}"; do
-            if [ -n "${p:-}" ] && [ -f "$p" ]; then IMAGE_PATH="$p"; break; fi
+            if [ -f "$p" ]; then 
+              IMAGE_PATH="$p"
+              break
+            fi
           done
+
+          # Fallback: comprehensive search
+          if [ -z "$IMAGE_PATH" ]; then
+            echo "🔍 Searching for Image..."
+            IMAGE_PATH="$(find "$KP/bazel-bin" -name "Image" -type f 2>/dev/null | head -n1)"
+          fi
 
           if [ -z "$IMAGE_PATH" ]; then
             echo "::error::❌ Could not locate built Image"
+            echo "📂 Debug: listing bazel-bin/common/"
+            ls -laR "$KP/bazel-bin/common/" || true
             exit 1
           fi
 
