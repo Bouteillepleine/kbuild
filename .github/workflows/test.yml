@@ -392,8 +392,7 @@ jobs:
           echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "✅ KernelSU version: $VERSION_FULL ($KSU_VERSION)"
 
-      - name: Apply SUSFS (optional)
-        if: ${{ github.event.inputs.SUSFS_META != '' }}
+      - name: Apply SUSFS       
         shell: bash
         run: |
           set -euo pipefail
