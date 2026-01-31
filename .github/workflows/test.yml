@@ -1,4 +1,4 @@
-name: Build OnePlus 15 Kernel
+name: Build OnePlus 15 Kernel (SukiSU Ultra + SUSFS)
 
 permissions:
   contents: write
@@ -101,6 +101,9 @@ jobs:
           fi
           echo "REPO=$REPO" >> "$GITHUB_ENV"
 
+          # ✅ FIX 1: Définir CONFIG pour compatibilité
+          echo "CONFIG=$GITHUB_WORKSPACE/OP15" >> "$GITHUB_ENV"
+
           git config --global feature.manyFiles true
           git config --global core.fsmonitor true
           git config --global pack.sparse true
@@ -164,7 +167,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Detect kernel version"
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform/common"
+          cd "$CONFIG/kernel_platform/common"
 
           VERSION=$(awk '/^VERSION *=/ {print $3}' Makefile)
           PATCHLEVEL=$(awk '/^PATCHLEVEL *=/ {print $3}' Makefile)
@@ -184,7 +187,7 @@ jobs:
           set -euo pipefail
           echo "::group::Detect toolchain"
 
-          KP="$GITHUB_WORKSPACE/OP15/kernel_platform"
+          KP="$CONFIG/kernel_platform"
 
           CLANG_FOUND=false
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
@@ -290,7 +293,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Clean ABI exports"
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
+          cd "$CONFIG/kernel_platform"
           rm -f common/android/abi_gki_protected_exports_* || true
           rm -f msm-kernel/android/abi_gki_protected_exports_* || true
           sed -i 's/protected_modules = \[.*\]/protected_modules = []/' common/modules.bzl || true
@@ -301,38 +304,38 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Add SukiSU Ultra"
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
-
+          cd "$CONFIG/kernel_platform"
+      
           META="${{ inputs.ksu_meta }}"
           if [[ "$(grep -o '/' <<< "$META" | wc -l)" -lt 2 ]]; then
             echo "::error::Invalid 'ksu_meta' format. Expected: branch/custom_tag/commit_hash"
             echo "Example: builtin/⚡Ultra⚡/abc12345"
             exit 1
           fi
-
+      
           IFS='/' read -r BRANCH_NAME CUSTOM_TAG MANUAL_HASH <<< "$META"
-
+      
           echo "Branch: $BRANCH_NAME"
           echo "Custom Tag: ${CUSTOM_TAG:-Not set}"
           echo "Manual Commit: ${MANUAL_HASH:-Not set}"
-
+      
           echo "Downloading KernelSU setup script..."
           if ! curl -LSs --retry 3 --retry-delay 2 --connect-timeout 30 \
                "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"; then
             echo "::error::KernelSU setup script failed"
             exit 1
           fi
-
+      
           if [ ! -d "./KernelSU" ]; then
             echo "::error::KernelSU directory was not created after setup"
             ls -la
             exit 1
           fi
-
+      
           cd ./KernelSU
-
+      
           echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
+      
           if [[ -n "$MANUAL_HASH" ]]; then
             echo "Checking out specified commit: $MANUAL_HASH"
             if ! git fetch origin "$BRANCH_NAME" --depth=50; then
@@ -346,15 +349,15 @@ jobs:
             SHORT_HASH="${MANUAL_HASH:0:8}"
             echo "KSU_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           fi
-
+      
           echo "::group::Fix sulog.c missing linux/version.h"
           SULOG_PATH="./kernel/sulog.c"
-
+      
           if [ -f "$SULOG_PATH" ]; then
             if ! grep -q '#include <linux/version.h>' "$SULOG_PATH"; then
               echo "Patching sulog.c to include linux/version.h..."
               sed -i '0,/^#include/s|^\(#include.*\)$|\1\n#include <linux/version.h>|' "$SULOG_PATH"
-
+      
               if grep -q '#include <linux/version.h>' "$SULOG_PATH"; then
                 echo "✅ Successfully added linux/version.h to sulog.c"
               else
@@ -368,68 +371,76 @@ jobs:
             echo "⚠️ Warning: sulog.c not found at $SULOG_PATH"
           fi
           echo "::endgroup::"
-
+      
           echo "Determining KSU API version..."
           KSU_API_VERSION=$(curl -fsSL --retry 3 --connect-timeout 30 \
             "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$BRANCH_NAME/kernel/Makefile" 2>/dev/null | \
             grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
-
+      
           if [[ -z "$KSU_API_VERSION" ]] && [ -f "kernel/Makefile" ]; then
             KSU_API_VERSION=$(grep -m1 "KSU_VERSION_API :=" kernel/Makefile | awk -F'= ' '{print $2}' | tr -d '[:space:]' || true)
           fi
-
+      
           if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "4.1.0" | sort -V | head -n1)" != "4.1.0" ]]; then
             echo "Warning: Invalid or missing API version. Using default: 4.1.0"
             KSU_API_VERSION="4.1.0"
           fi
-
+      
           echo "KSU API Version: $KSU_API_VERSION"
           echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
-
+      
           GIT_HASH=$(git rev-parse --short HEAD)
           echo "GIT_HASH=$GIT_HASH"
-
+      
           if [[ -n "$MANUAL_HASH" ]]; then
             USE_HASH="$SHORT_HASH"
           else
             USE_HASH="$GIT_HASH"
           fi
-
+      
           if [[ -z "$CUSTOM_TAG" ]]; then
             VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$BRANCH_NAME"
           else
             VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$BRANCH_NAME[$USE_HASH]"
           fi
-
-          echo "Injecting version info into kernel/Makefile..."
+      
+          echo "Injecting version info into kernel/Makefile..."          
+         
           sed -i '/define get_ksu_version_full/,/endef/d' kernel/Makefile
           sed -i '/KSU_VERSION_API :=/d' kernel/Makefile
           sed -i '/KSU_VERSION_FULL :=/d' kernel/Makefile
-
-          # ✅ FIX: Use echo instead of here-document
-          VERSION_DEFINITIONS="define get_ksu_version_full
+      
+          if grep -q '^REPO_OWNER :=' kernel/Makefile; then
+          sed -i "/^REPO_OWNER :=/a\\
+          \\
+          define get_ksu_version_full\\
+          $VERSION_FULL\\
+          endef\\
+          \\
+          KSU_VERSION_API := $KSU_API_VERSION\\
+          KSU_VERSION_FULL := $VERSION_FULL" kernel/Makefile
+          else
+          cat >> kernel/Makefile <<EOF
+          
+          define get_ksu_version_full
           $VERSION_FULL
           endef
           
           KSU_VERSION_API := $KSU_API_VERSION
-          KSU_VERSION_FULL := $VERSION_FULL"
-
-          awk -v def="$VERSION_DEFINITIONS" '
-            /REPO_OWNER :=/ {print; print def; inserted=1; next}
-            1
-            END {if (!inserted) print def}
-          ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
-
+          KSU_VERSION_FULL := $VERSION_FULL
+          EOF
+          fi
+      
           KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 37185)
           echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
-
+      
           echo "::group::Makefile Version Preview"
           echo "Full Version: $VERSION_FULL"
           echo "Manager Version: $KSU_VERSION"
           grep -A10 "REPO_OWNER" kernel/Makefile || true
           grep "KSU_VERSION_FULL" kernel/Makefile || true
           echo "::endgroup::"
-
+      
           echo "✅ SukiSU Ultra successfully added"
           echo "   Version: $VERSION_FULL"
           echo "   Manager: v$KSU_VERSION"
@@ -452,7 +463,7 @@ jobs:
             exit 1
           fi
       
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
+          cd "$CONFIG/kernel_platform"
       
           SUSFS_PATCH="50_add_susfs_in_gki-${ANDROID_VER}-${KERNEL_VER}.patch"
           SRC_PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/$SUSFS_PATCH"
@@ -471,7 +482,6 @@ jobs:
       
           cd ./common
       
-          # Record SUSFS version if available
           if [ -f "./include/linux/susfs.h" ]; then
             SUSFS_VERSION="$(grep '#define SUSFS_VERSION' ./include/linux/susfs.h | awk -F'"' '{print $2}' || true)"
             echo "SUSVER=${SUSFS_VERSION:-unknown}" >> "$GITHUB_ENV"
@@ -483,7 +493,6 @@ jobs:
           SUBLEVEL="$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')"
           echo "GKI_V=$GKI_V SUBLEVEL=$SUBLEVEL"               
       
-          # Fake guard for task_mmu.c (android16-6.12)
           fake_patched=0
           if [ "$GKI_V" = "android16-6.12" ]; then
             if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
@@ -499,7 +508,6 @@ jobs:
           echo "Applying SUSFS patch (tolerant): $SUSFS_PATCH"
           patch -p1 -F 3 < "$SUSFS_PATCH" || true
       
-          # Revert the temporary guard
           if [ "$fake_patched" = 1 ]; then
             echo "Reverting temporary task_mmu.c guard..."
             sed -i \
@@ -510,14 +518,14 @@ jobs:
       
           echo "✅ SUSFS step complete (tolerant). SUSFS version: ${SUSFS_VERSION:-unknown}"
           echo "::endgroup::"
-          
+
       - name: 🛡️ Add BBG (Optional)
         if: ${{ env.OP_BBG == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Add BBG LSM"
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
+          cd "$CONFIG/kernel_platform"
           if ! wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash -s fix_blkdev_rename; then
             echo "::warning::BBG setup script failed, continuing anyway"
           fi
@@ -530,7 +538,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Kernel config"
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
+          cd "$CONFIG/kernel_platform"
           DEFCONFIG="common/arch/arm64/configs/gki_defconfig"
 
           add_cfg() { grep -qxF "$1" "$DEFCONFIG" || echo "$1" >> "$DEFCONFIG"; }
@@ -595,7 +603,9 @@ jobs:
             add_cfg "CONFIG_IP_SET_LIST_SET=y"
           fi
 
-          # ✅ FIX: Apply optimization level from input
+          # ✅ FIX 3: Nettoyer les anciennes lignes avant d'ajouter O2/O3
+          sed -i '/^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=/d;/^CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=/d' "$DEFCONFIG"
+
           if [ "${{ inputs.optimize_level }}" = "O3" ]; then
             add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y"
             add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=n"
@@ -632,44 +642,47 @@ jobs:
           set -euo pipefail
           echo "::group::Fix 6.12 bazel defconfig check"
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' \
-            "$GITHUB_WORKSPACE/OP15/kernel_platform/common/BUILD.bazel"
+            "$CONFIG/kernel_platform/common/BUILD.bazel"
           echo "::endgroup::"
 
-      - name: 🔧 Fix Kleaf py3-cmd
+      - name: 🔧 Fix Kleaf py3-cmd (auto-detect)
         shell: bash
         run: |
           set -euo pipefail
-          echo "::group::Fix Kleaf py3-cmd"
-          
-          KP="$GITHUB_WORKSPACE/OP15/kernel_platform"
-          MUSL="$KP/prebuilts/build-tools/linux_musl-x86/bin"
-          X86="$KP/prebuilts/build-tools/linux-x86/bin"
-          
-          echo "Checking for py3-cmd..."
-          ls -la "$MUSL" || true
-          ls -la "$X86" || true
-          
-          if [ -x "$MUSL/py3-cmd" ]; then
-            echo "✅ linux_musl-x86 py3-cmd already exists"
-            echo "::endgroup::"
-            exit 0
+          echo "::group::Fix Kleaf py3-cmd (auto-detect)"
+
+          KP="$CONFIG/kernel_platform"
+          ORIGIN="$KP/build/kernel/kleaf/bazel.origin.sh"
+
+          if [ ! -f "$ORIGIN" ]; then
+            echo "::error::bazel.origin.sh not found: $ORIGIN"
+            ls -la "$KP/build/kernel/kleaf" || true
+            exit 1
           fi
-          
-          mkdir -p "$MUSL"
-          
-          if [ -x "$X86/py3-cmd" ]; then
-            echo "Creating symlink linux_musl-x86/bin/py3-cmd -> linux-x86/bin/py3-cmd"
-            ln -sf "$X86/py3-cmd" "$MUSL/py3-cmd"
-            chmod +x "$MUSL/py3-cmd" || true
+
+          # ✅ FIX 2: Auto-detect le chemin exact attendu par Kleaf
+          WANT_REL="$(grep -RhoE 'prebuilts/[^ ]+/linux_musl-x86/bin/py3-cmd' "$ORIGIN" | head -n1 || true)"
+          if [ -z "$WANT_REL" ]; then
+            WANT_REL="prebuilts/build-tools/linux_musl-x86/bin/py3-cmd"
+          fi
+
+          WANT="$KP/$WANT_REL"
+          mkdir -p "$(dirname "$WANT")"
+
+          SRC="$(find "$KP/prebuilts" -path '*/linux-x86/bin/py3-cmd' -type f 2>/dev/null | head -n1 || true)"
+
+          if [ -n "$SRC" ] && [ -x "$SRC" ]; then
+            ln -sf "$SRC" "$WANT"
+            chmod +x "$WANT" || true
+            echo "✅ Linked: $WANT -> $SRC"
           else
-            echo "linux-x86 py3-cmd not found; generating minimal wrapper that calls python3"
-            echo '#!/usr/bin/env bash' > "$MUSL/py3-cmd"
-            echo 'exec python3 "$@"' >> "$MUSL/py3-cmd"
-            chmod +x "$MUSL/py3-cmd"
+            echo '#!/usr/bin/env bash' > "$WANT"
+            echo 'exec python3 "$@"' >> "$WANT"
+            chmod +x "$WANT"
+            echo "✅ Created wrapper: $WANT"
           fi
-          
-          echo "✅ py3-cmd is now present at: $MUSL/py3-cmd"
-          "$MUSL/py3-cmd" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || true
+
+          "$WANT" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || true
           echo "::endgroup::"
 
       - name: 🏗️ Build the Kernel
@@ -678,7 +691,7 @@ jobs:
           set -euo pipefail
           echo "::group::Build kernel"
       
-          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
+          cd "$CONFIG/kernel_platform"
           
           if [ "${{ inputs.clean_build }}" = "true" ]; then
             echo "Clean build: removing output directories..."
@@ -691,7 +704,6 @@ jobs:
             echo "Using ccache from: $CCACHE_DIR"
           fi
       
-          # ✅ FIX: Better trap handling
           (stdbuf -oL bash -c '
             while true; do
               echo "=== $(date) ==="
@@ -733,9 +745,8 @@ jobs:
           set -euo pipefail
           echo "::group::Collect build stats"
       
-          KP="$GITHUB_WORKSPACE/OP15/kernel_platform"
+          KP="$CONFIG/kernel_platform"
           
-          # ✅ FIX: Better Image detection with logging
           echo "Searching for kernel Image..."
           find "$KP" -name "Image" -type f 2>/dev/null || true
           
@@ -772,7 +783,6 @@ jobs:
           KERNEL_UNAME="$(strings "$IMAGE_PATH" | grep -E 'Linux version.*#' | tail -n1 || echo 'unknown')"
           echo "KERNEL_UNAME=$KERNEL_UNAME" >> "$GITHUB_ENV"
       
-          # Warnings count
           WARNINGS_COUNT="0"
           if [ -f "$KP/build.log" ]; then
             WARNINGS_COUNT="$(grep -ciE '\bwarning:' "$KP/build.log" || true)"
@@ -794,7 +804,6 @@ jobs:
           cp "$IMAGE_PATH" "$GITHUB_WORKSPACE/AnyKernel3/Image"
           cd "$GITHUB_WORKSPACE/AnyKernel3"
       
-          # ✅ FIX: Default values for missing vars
           KSUVER="${KSUVER:-unknown}"
           SUSVER="${SUSVER:-nosusfs}"
       
@@ -827,7 +836,6 @@ jobs:
 
           KSU_REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra"
           
-          # ✅ FIX: Defaults for missing vars
           SUSFS_COMMIT_SHA="${SUSFS_COMMIT_SHA:-unknown}"
           SUSFS_BRANCH_NAME="${SUSFS_BRANCH_NAME:-unknown}"
           KSUVER="${KSUVER:-unknown}"
@@ -879,8 +887,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Cleanup"
-          sudo rm -rf "$GITHUB_WORKSPACE/OP15/kernel_platform/common/out" || true
-          sudo rm -rf "$GITHUB_WORKSPACE/OP15/.repo" || true
+          sudo rm -rf "$CONFIG/kernel_platform/common/out" || true
+          sudo rm -rf "$CONFIG/.repo" || true
           sudo rm -rf /tmp/* || true
           df -h /
           echo "::endgroup::"
