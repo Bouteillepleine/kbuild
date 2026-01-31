@@ -691,14 +691,7 @@ jobs:
               fi
             fi
           done
-
-      - name: Fix SUSFS header
-        if: ${{ contains(github.event.inputs.FILE, 'android15-6.6') || contains(github.event.inputs.FILE, 'android16-6.12') }}
-        run: |
-          if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            sed -i '/#include "fd.h"/a #include <linux/susfs.h>' kernel_workspace/common/fs/proc/base.c
-          fi
-
+     
       - name: Modules        
         run: |
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' kernel_workspace/common/BUILD.bazel
