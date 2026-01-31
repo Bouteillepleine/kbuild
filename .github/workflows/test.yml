@@ -30,13 +30,7 @@ on:
         type: boolean
         description: "Use SUSFS dev branch?"
         required: false
-        default: false
-
-      XUS_FIX:
-        type: boolean
-        description: "Apply XUS fix (No_5uS.patch)?"
-        required: false
-        default: false
+        default: false      
 
       BUILD_TIME:
         type: string
@@ -534,15 +528,7 @@ jobs:
             fi
             echo "✅ Fake patches reverted"
           fi
-
-          # Apply XUS fix if enabled
-          if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
-            echo "🔧 Applying XUS fix (No_5uS.patch)..."
-            cp ../../Action-Build/patches/No_5uS.patch ./
-            patch -p1 < No_5uS.patch || true
-            echo "✅ XUS fix applied"
-          fi
-
+            
       - name: Add Configuration Settings
         shell: bash
         run: |
@@ -675,23 +661,59 @@ jobs:
         run: |
           set -euo pipefail
           INPUT_TIME="${{ github.event.inputs.BUILD_TIME }}"
+          
+          # Déterminer la date à utiliser
           if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "F" && "$INPUT_TIME" != "f" ]]; then
             DATESTR="$INPUT_TIME"
+            echo "📅 Using custom build time: $DATESTR"
           else
             DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"
+            echo "📅 Using current UTC time: $DATESTR"
           fi
+          
+          # Exporter les variables d'environnement
           echo "KBUILD_BUILD_TIMESTAMP=${DATESTR}" >> "$GITHUB_ENV"
           echo "KBUILD_BUILD_VERSION=1" >> "$GITHUB_ENV"
-
+          echo "KBUILD_BUILD_USER=kleaf" >> "$GITHUB_ENV"
+          echo "KBUILD_BUILD_HOST=build-host" >> "$GITHUB_ENV"
+          
           cd kernel_workspace
+          
+          # Méthode 1 : Patcher mkcompile_h (pour builds classiques)
           for f in common/scripts/mkcompile_h msm-kernel/scripts/mkcompile_h; do
-            if [ -f "$f" ] && grep -q 'UTS_VERSION=' "$f"; then
-              perl -pi -e "s{UTS_VERSION=\"\\\$\\(.*?\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
+            if [ -f "$f" ]; then
+              echo "🔧 Patching $f..."
+              
+              # Backup original
+              cp "$f" "${f}.bak"
+              
+              # Remplacer la ligne UTS_VERSION
+              if grep -q 'UTS_VERSION=' "$f"; then
+                sed -i "s|UTS_VERSION=.*|UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"|" "$f"
+                echo "  ✅ UTS_VERSION patched in $f"
+              fi
+              
+              # Forcer la date dans le script
+              if grep -q 'TIMESTAMP=' "$f"; then
+                sed -i "s|TIMESTAMP=.*|TIMESTAMP=\"$DATESTR\"|" "$f"
+                echo "  ✅ TIMESTAMP patched in $f"
+              fi
             fi
           done
-          echo "✅ Build time set: $DATESTR"
+          
+          # Méthode 2 : Créer un fichier de timestamp pour Bazel
+          echo "$DATESTR" > common/.build_timestamp
+          
+          # Méthode 3 : Patcher compile.h directement (fallback)
+          COMPILE_H="common/include/generated/compile.h"
+          if [ -f "$COMPILE_H" ]; then
+            echo "🔧 Patching existing compile.h..."
+            sed -i "s|#define UTS_VERSION.*|#define UTS_VERSION \"#1 SMP PREEMPT $DATESTR\"|" "$COMPILE_H"
+          fi
+          
+          echo "✅ Build time configured: $DATESTR"
 
-      - name: Fix 6.12 Protected Modules
+      - name: Protected Modules
         shell: bash
         run: |
           set -euo pipefail
@@ -720,12 +742,25 @@ jobs:
             export CCACHE_DISABLE=1
             echo "🚫 ccache disabled"
           fi
+          
+          # Exporter les variables de build time pour Bazel
+          export KBUILD_BUILD_TIMESTAMP="${{ env.KBUILD_BUILD_TIMESTAMP }}"
+          export KBUILD_BUILD_VERSION="1"
+          export KBUILD_BUILD_USER="kleaf"
+          export KBUILD_BUILD_HOST="build-host"
 
           echo "🔨 Starting kernel build..."
           if [ -f "build/build.sh" ]; then
-            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+            LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
           else
-            tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist 2>&1 | tee build.log
+            tools/bazel build \
+              --config=fast \
+              --lto=none \
+              --action_env=KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP}" \
+              --action_env=KBUILD_BUILD_VERSION="1" \
+              --action_env=KBUILD_BUILD_USER="kleaf" \
+              --action_env=KBUILD_BUILD_HOST="build-host" \
+              //common:kernel_aarch64_dist 2>&1 | tee build.log
           fi
           echo "✅ Build complete"
 
@@ -785,6 +820,56 @@ jobs:
           echo "✅ Build time: ${BUILD_TIME}s"
           echo "::endgroup::"
 
+      - name: 🔧 Timestamp in Image
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          INPUT_TIME="${{ github.event.inputs.BUILD_TIME }}"
+          if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "F" && "$INPUT_TIME" != "f" ]]; then
+            DATESTR="$INPUT_TIME"
+          else
+            DATESTR="$(TZ='UTC' date +'%a %b %d %T %Z %Y')"
+          fi
+          
+          IMAGE_PATH="${{ env.IMAGE_PATH }}"
+          
+          if [ -f "$IMAGE_PATH" ]; then
+            echo "🔧 Checking timestamp in kernel Image..."
+            
+            # Rechercher la date epoch
+            OLD_DATE="Thu Jan  1 00:00:00 UTC 1970"
+            
+            # Vérifier si la date epoch existe
+            if strings "$IMAGE_PATH" | grep -q "$OLD_DATE"; then
+              echo "  ⚠️  Found epoch date in Image, attempting to replace..."
+              
+              # Créer une copie temporaire
+              cp "$IMAGE_PATH" "${IMAGE_PATH}.tmp"
+              
+              # La nouvelle date doit avoir EXACTEMENT la même longueur (29 caractères)
+              PADDED_DATE=$(printf "%-29s" "$DATESTR")
+              
+              # Remplacer avec sed (en binaire)
+              sed -i "s/${OLD_DATE}/${PADDED_DATE}/g" "${IMAGE_PATH}.tmp"
+              
+              # Vérifier que le remplacement a fonctionné
+              if strings "${IMAGE_PATH}.tmp" | grep -q "$DATESTR"; then
+                mv "${IMAGE_PATH}.tmp" "$IMAGE_PATH"
+                echo "  ✅ Timestamp successfully patched in Image!"
+                
+                # Recalculer le SHA256
+                IMAGE_SHA256="$(sha256sum "$IMAGE_PATH" | awk '{print $1}')"
+                echo "IMAGE_SHA256=$IMAGE_SHA256" >> "$GITHUB_ENV"
+              else
+                echo "  ⚠️  Patch failed, keeping original"
+                rm "${IMAGE_PATH}.tmp"
+              fi
+            else
+              echo "  ✅ No epoch date found (timestamp already correct or not embedded)"
+            fi
+          fi
+
       - name: Make AnyKernel3
         shell: bash
         run: |
@@ -826,22 +911,38 @@ jobs:
             SUSFS_SUFFIX="_SUSFS"
           fi
           
-          ZIP_NAME="AnyKernel3_${KSU_SOURCE_NAME}_${{ env.KSUVER }}${SUSFS_SUFFIX}_OnePlus15_${{ env.TKERNEL_VERSION }}.zip"
+          # Nom du ZIP final (SANS .zip à la fin)
+          ZIP_BASE="AnyKernel3_${KSU_SOURCE_NAME}_${{ env.KSUVER }}${SUSFS_SUFFIX}_OnePlus15_${{ env.TKERNEL_VERSION }}"
           
-          echo "📦 Creating ZIP: $ZIP_NAME"
-          zip -r9 "../${ZIP_NAME}" * -x .git README.md '*placeholder*'
+          echo "📦 Creating ZIP: ${ZIP_BASE}.zip"
+          
+          # Créer le ZIP dans le répertoire parent
+          zip -r9 "../${ZIP_BASE}.zip" * -x .git README.md '*placeholder*'
+          
           cd ..
           
-          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
-          ZIP_SHA256="$(sha256sum "$ZIP_NAME" | awk '{print $1}')"
+          # Vérifier que le fichier existe
+          if [ ! -f "${ZIP_BASE}.zip" ]; then
+            echo "::error::❌ ZIP file not created!"
+            exit 1
+          fi
+          
+          # Sauvegarder le nom complet (avec .zip)
+          echo "ZIP_NAME=${ZIP_BASE}.zip" >> "$GITHUB_ENV"
+          
+          # Calculer le SHA256
+          ZIP_SHA256="$(sha256sum "${ZIP_BASE}.zip" | awk '{print $1}')"
           echo "ZIP_SHA256=$ZIP_SHA256" >> "$GITHUB_ENV"
-          echo "✅ ZIP created: $ZIP_NAME"
+          
+          echo "✅ ZIP created: ${ZIP_BASE}.zip"
+          echo "✅ SHA256: $ZIP_SHA256"
 
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
 
       - name: 📊 Build Summary
         shell: bash
@@ -916,7 +1017,6 @@ jobs:
           - ✅ IPSET & IPv6 NAT
           - ✅ Unicode Bypass Fix
           EOF
-
 
       - name: Post-build Disk Check
         run: df -h
