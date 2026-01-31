@@ -121,7 +121,6 @@ jobs:
           echo "🔧 KSU Source: ${{ github.event.inputs.KSU_SOURCE }}"
           echo "🔐 SUSFS Commit: ${{ github.event.inputs.SUSFS_META || 'Disabled' }}"
           echo "🧪 SUSFS Dev: ${{ github.event.inputs.SUSFS_DEV }}"
-          echo "🔧 XUS Fix: ${{ github.event.inputs.XUS_FIX }}"
           echo "📝 KSU Meta: ${{ github.event.inputs.KSU_META }}"
           echo "🕐 Build Time: ${{ github.event.inputs.BUILD_TIME }}"
           echo "🏷️  Suffix: ${{ github.event.inputs.SUFFIX || 'Random' }}"
@@ -145,7 +144,7 @@ jobs:
           free -h
 
       - name: Set Cache Environment
-        if: ${{ github.event.inputs.BUILD_NOCCACHE == false }}
+        if: github.event.inputs.BUILD_NOCCACHE == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -166,14 +165,14 @@ jobs:
           execute_install_scripts: true
 
       - name: Restore Ccache
-        if: ${{ github.event.inputs.BUILD_NOCCACHE == false }}
+        if: github.event.inputs.BUILD_NOCCACHE == 'false'
         uses: actions/cache@v3
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ env.BUILD_METHOD }}-16
 
       - name: Initialize Ccache
-        if: ${{ github.event.inputs.BUILD_NOCCACHE == false }}
+        if: github.event.inputs.BUILD_NOCCACHE == 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -260,7 +259,7 @@ jobs:
           echo "✅ Kernel version: $NEW_VERSION (${KV1}.${KV2}.${KV3})"
 
       - name: Custom Kernel Suffix (if set)
-        if: ${{ github.event.inputs.SUFFIX != '' }}
+        if: github.event.inputs.SUFFIX != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -289,7 +288,7 @@ jobs:
           echo "✅ Custom suffix applied: $SUFFIX"
 
       - name: Custom Kernel Random Suffix (if empty)
-        if: ${{ github.event.inputs.SUFFIX == '' }}
+        if: github.event.inputs.SUFFIX == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -723,7 +722,7 @@ jobs:
           echo "✅ Protected modules check disabled"
 
       - name: Clean build (optional)
-        if: ${{ github.event.inputs.clean_build == true }}
+        if: github.event.inputs.clean_build == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -749,13 +748,13 @@ jobs:
           export KBUILD_BUILD_USER="kleaf"
           export KBUILD_BUILD_HOST="build-host"
 
-          echo "🔨 Starting kernel build..."
+          echo "🔨 Starting kernel build with ThinLTO..."
           if [ -f "build/build.sh" ]; then
-            LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
           else
             tools/bazel build \
               --config=fast \
-              --lto=none \
+              --lto=thin \
               --action_env=KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP}" \
               --action_env=KBUILD_BUILD_VERSION="1" \
               --action_env=KBUILD_BUILD_USER="kleaf" \
@@ -820,7 +819,7 @@ jobs:
           echo "✅ Build time: ${BUILD_TIME}s"
           echo "::endgroup::"
 
-      - name: 🔧 Timestamp in Image
+      - name: 🔧 Fix Timestamp in Image
         shell: bash
         run: |
           set -euo pipefail
@@ -875,10 +874,28 @@ jobs:
         run: |
           set -euo pipefail
           echo "📦 Creating AnyKernel3 package..."
+          
+          # Clone AnyKernel3
           git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
+          
+          # Vérifier que l'Image existe
+          if [ ! -f "${{ env.IMAGE_PATH }}" ]; then
+            echo "::error::❌ Image not found at ${{ env.IMAGE_PATH }}"
+            exit 1
+          fi
+          
+          # Copier l'Image
           cp "${{ env.IMAGE_PATH }}" ./AnyKernel3/Image
+          
+          # Vérifier que la copie a réussi
+          if [ ! -f "./AnyKernel3/Image" ]; then
+            echo "::error::❌ Failed to copy Image to AnyKernel3/"
+            exit 1
+          fi
+          
           echo "✅ AnyKernel3 prepared"
+          echo "✅ Image size: $(du -h ./AnyKernel3/Image | cut -f1)"
 
       - name: Apply KPM patch
         shell: bash
@@ -886,24 +903,62 @@ jobs:
           set -euo pipefail
           
           PATCH_DIR="${GITHUB_WORKSPACE}/Action-Build/patches"
+          cd AnyKernel3
+          
+          # Vérifier que Image existe avant de patcher
+          if [ ! -f "Image" ]; then
+            echo "::error::❌ Image not found before KPM patch!"
+            exit 1
+          fi
+          
+          # Sauvegarder l'Image original
+          cp Image Image.backup
+          
           if [ -f "${PATCH_DIR}/patch_linux" ]; then
             echo "🔧 Applying KPM patch_linux..."
-            cd AnyKernel3
             cp "${PATCH_DIR}/patch_linux" .
             chmod +x patch_linux
-            ./patch_linux
-            rm -f Image
-            mv oImage Image 2>/dev/null || true
-            echo "✅ KPM patch applied"
+            
+            # Appliquer le patch
+            if ./patch_linux; then
+              echo "✅ KPM patch applied successfully"
+              
+              # Vérifier que oImage a été créé
+              if [ -f "oImage" ]; then
+                rm -f Image
+                mv oImage Image
+                echo "✅ Image replaced with patched version"
+              else
+                echo "⚠️  oImage not created, keeping original Image"
+              fi
+            else
+              echo "⚠️  KPM patch failed, keeping original Image"
+            fi
+            
+            # Nettoyer
+            rm -f Image.backup patch_linux
           else
-            echo "⏭️  No KPM patch found"
+            echo "⏭️  No KPM patch found, keeping original Image"
+            rm -f Image.backup
           fi
+          
+          # Vérification finale
+          if [ ! -f "Image" ]; then
+            echo "::error::❌ Image lost after KPM patch!"
+            if [ -f "Image.backup" ]; then
+              mv Image.backup Image
+              echo "✅ Restored Image from backup"
+            else
+              exit 1
+            fi
+          fi
+          
+          echo "✅ Final Image size: $(du -h Image | cut -f1)"
 
       - name: Create ZIP
         shell: bash
         run: |
           set -euo pipefail
-          cd AnyKernel3
           
           KSU_SOURCE_NAME="${{ github.event.inputs.KSU_SOURCE }}"
           SUSFS_SUFFIX=""
@@ -911,38 +966,66 @@ jobs:
             SUSFS_SUFFIX="_SUSFS"
           fi
           
-          # Nom du ZIP final (SANS .zip à la fin)
+          # Nom du ZIP (SANS extension .zip)
           ZIP_BASE="AnyKernel3_${KSU_SOURCE_NAME}_${{ env.KSUVER }}${SUSFS_SUFFIX}_OnePlus15_${{ env.TKERNEL_VERSION }}"
+          ZIP_FILE="${ZIP_BASE}.zip"
           
-          echo "📦 Creating ZIP: ${ZIP_BASE}.zip"
+          echo "📦 Creating ZIP: $ZIP_FILE"
           
-          # Créer le ZIP dans le répertoire parent
-          zip -r9 "../${ZIP_BASE}.zip" * -x .git README.md '*placeholder*'
+          # Vérifier que Image existe dans AnyKernel3
+          if [ ! -f "AnyKernel3/Image" ]; then
+            echo "::error::❌ Image not found in AnyKernel3/"
+            echo "📂 Contents of AnyKernel3/:"
+            ls -lah AnyKernel3/
+            exit 1
+          fi
           
+          # Vérifier que anykernel.sh existe
+          if [ ! -f "AnyKernel3/anykernel.sh" ]; then
+            echo "::error::❌ anykernel.sh not found in AnyKernel3/"
+            exit 1
+          fi
+          
+          # Créer le ZIP
+          cd AnyKernel3
+          zip -r9 "../${ZIP_FILE}" * -x '.git/*' 'README.md' '*placeholder*' '.gitignore'
           cd ..
           
-          # Vérifier que le fichier existe
-          if [ ! -f "${ZIP_BASE}.zip" ]; then
+          # Vérifier que le ZIP a été créé
+          if [ ! -f "$ZIP_FILE" ]; then
             echo "::error::❌ ZIP file not created!"
             exit 1
           fi
           
-          # Sauvegarder le nom complet (avec .zip)
-          echo "ZIP_NAME=${ZIP_BASE}.zip" >> "$GITHUB_ENV"
+          # Vérifier le contenu du ZIP
+          echo "📋 ZIP contents:"
+          unzip -l "$ZIP_FILE" | head -20
+          
+          # Vérifier que Image est dans le ZIP
+          if ! unzip -l "$ZIP_FILE" | grep -q "Image"; then
+            echo "::error::❌ Image not found in ZIP!"
+            exit 1
+          fi
+          
+          # Sauvegarder les variables (chemin absolu)
+          echo "ZIP_NAME=${ZIP_FILE}" >> "$GITHUB_ENV"
+          echo "ZIP_PATH=${GITHUB_WORKSPACE}/${ZIP_FILE}" >> "$GITHUB_ENV"
           
           # Calculer le SHA256
-          ZIP_SHA256="$(sha256sum "${ZIP_BASE}.zip" | awk '{print $1}')"
+          ZIP_SHA256="$(sha256sum "$ZIP_FILE" | awk '{print $1}')"
           echo "ZIP_SHA256=$ZIP_SHA256" >> "$GITHUB_ENV"
           
-          echo "✅ ZIP created: ${ZIP_BASE}.zip"
+          echo "✅ ZIP created: $ZIP_FILE"
+          echo "✅ Size: $(du -h "$ZIP_FILE" | cut -f1)"
           echo "✅ SHA256: $ZIP_SHA256"
 
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
-          path: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_PATH }}
           if-no-files-found: error
+          compression-level: 0
 
       - name: 📊 Build Summary
         shell: bash
@@ -958,13 +1041,6 @@ jobs:
             SUSFS_ENABLED="✅"
           else
             SUSFS_ENABLED="❌"
-          fi
-          
-          # Détection XUS Fix
-          if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
-            XUS_ENABLED="✅"
-          else
-            XUS_ENABLED="❌"
           fi
           
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
@@ -987,7 +1063,6 @@ jobs:
           | **SUSFS** | ${SUSVER} |
           | **SUSFS Branch** | ${SUSFS_BRANCH_NAME} |
           | **SUSFS Dev** | ${{ github.event.inputs.SUSFS_DEV && '✅ Yes' || '❌ No' }} |
-          | **XUS Fix** | ${{ github.event.inputs.XUS_FIX && '✅ Applied' || '❌ Not applied' }} |
           | **LTO** | ${{ env.OP_LTO }} |
           | **Clean Build** | ${{ github.event.inputs.clean_build && '✅ Yes' || '❌ No' }} |
           | **Ccache** | ${{ github.event.inputs.BUILD_NOCCACHE && '❌ Disabled' || '✅ Enabled' }} |
@@ -1011,7 +1086,6 @@ jobs:
           - ✅ KernelSU (${{ github.event.inputs.KSU_SOURCE }})
           - ✅ KPM (Kernel Patch Manager)
           - ${SUSFS_ENABLED} SUSFS
-          - ${XUS_ENABLED} XUS Fix
           - ✅ BBR & ECN
           - ✅ LSM (Baseband Guard)
           - ✅ IPSET & IPv6 NAT
