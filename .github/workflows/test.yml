@@ -625,6 +625,46 @@ jobs:
             "$GITHUB_WORKSPACE/OP15/kernel_platform/common/BUILD.bazel"
           echo "::endgroup::"
 
+      - name: Fix Kleaf
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Fix Kleaf py3-cmd"
+      
+          KP="$GITHUB_WORKSPACE/OP15/kernel_platform"
+          MUSL="$KP/prebuilts/build-tools/linux_musl-x86/bin"
+          X86="$KP/prebuilts/build-tools/linux-x86/bin"
+      
+          echo "Checking for py3-cmd..."
+          ls -la "$MUSL" || true
+          ls -la "$X86" || true
+      
+          if [ -x "$MUSL/py3-cmd" ]; then
+            echo "✅ linux_musl-x86 py3-cmd already exists"
+            echo "::endgroup::"
+            exit 0
+          fi
+      
+          mkdir -p "$MUSL"
+      
+          if [ -x "$X86/py3-cmd" ]; then
+            echo "Creating symlink linux_musl-x86/bin/py3-cmd -> linux-x86/bin/py3-cmd"
+            ln -sf "$X86/py3-cmd" "$MUSL/py3-cmd"
+            chmod +x "$MUSL/py3-cmd" || true
+          else
+            echo "linux-x86 py3-cmd not found; generating minimal wrapper that calls python3"
+            cat > "$MUSL/py3-cmd" <<'EOF'
+            #!/usr/bin/env bash
+            exec python3 "$@"
+            EOF
+            chmod +x "$MUSL/py3-cmd"
+          fi
+      
+          echo "✅ py3-cmd is now present at: $MUSL/py3-cmd"
+          "$MUSL/py3-cmd" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || true
+          echo "::endgroup::"
+
+
       - name: Build the Kernel
         shell: bash
         run: |
