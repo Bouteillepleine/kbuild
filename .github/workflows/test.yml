@@ -567,6 +567,13 @@ jobs:
           done
           echo "✅ Build time set: $DATESTR"
 
+      - name: Fix 6.12        
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' \
+            kernel_workspace/common/BUILD.bazel
+
       - name: Clean build (optional)
         if: ${{ github.event.inputs.clean_build == true }}
         shell: bash
