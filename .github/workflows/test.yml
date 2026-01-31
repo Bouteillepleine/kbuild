@@ -616,7 +616,7 @@ jobs:
           echo "✅ Kernel configured"
           echo "::endgroup::"
 
-      - name: Fix 6.12
+      - name: Modules
         shell: bash
         run: |
           set -euo pipefail
