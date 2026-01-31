@@ -852,6 +852,20 @@ jobs:
           SUSFS_BRANCH_NAME="${SUSFS_BRANCH_NAME:-N/A}"
           SUSVER="${SUSVER:-N/A}"
           
+          # Détection intelligente de SUSFS (basée sur SUSVER)
+          if [ "$SUSVER" != "N/A" ] && [ -n "$SUSVER" ]; then
+            SUSFS_ENABLED="✅"
+          else
+            SUSFS_ENABLED="❌"
+          fi
+          
+          # Détection XUS Fix
+          if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
+            XUS_ENABLED="✅"
+          else
+            XUS_ENABLED="❌"
+          fi
+          
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           # 🎉 OnePlus 15 Kernel Build Complete
 
@@ -895,13 +909,14 @@ jobs:
           ## ✨ Features Enabled
           - ✅ KernelSU (${{ github.event.inputs.KSU_SOURCE }})
           - ✅ KPM (Kernel Patch Manager)
-          - $([ -n "${{ github.event.inputs.SUSFS_META }}" ] && echo "✅" || echo "❌") SUSFS
-          - $([ "${{ github.event.inputs.XUS_FIX }}" = "true" ] && echo "✅" || echo "❌") XUS Fix
+          - ${SUSFS_ENABLED} SUSFS
+          - ${XUS_ENABLED} XUS Fix
           - ✅ BBR & ECN
           - ✅ LSM (Baseband Guard)
           - ✅ IPSET & IPv6 NAT
           - ✅ Unicode Bypass Fix
           EOF
+
 
       - name: Post-build Disk Check
         run: df -h
