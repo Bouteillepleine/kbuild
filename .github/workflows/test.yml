@@ -428,8 +428,7 @@ jobs:
             echo "✅ Action-Build cloned"
           fi
 
-      - name: Apply SUSFS & Advanced Patches
-        if: ${{ github.event.inputs.SUSFS_META != '' }}
+      - name: Apply SUSFS & Advanced Patches        
         shell: bash
         run: |
           set -euo pipefail
