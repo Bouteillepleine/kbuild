@@ -97,7 +97,7 @@ jobs:
           echo "OP_MODEL=OnePlus 15" >> "$GITHUB_ENV"
           echo "OP_SOC=Snapdragon 8 Elite" >> "$GITHUB_ENV"
           echo "OP_OS_VERSION=Android 16" >> "$GITHUB_ENV"
-          echo "OP_LTO=thin" >> "$GITHUB_ENV"
+          echo "OP_LTO=none" >> "$GITHUB_ENV"
           echo "BUILD_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
 
       - name: Maximize Build Space
@@ -640,21 +640,6 @@ jobs:
           fi
           echo "✅ Unicode bypass fix applied"
 
-      - name: Fix IPv6 NAT Error
-        shell: bash
-        run: |
-          set -euo pipefail
-          PATCH_DIR="${GITHUB_WORKSPACE}/Action-Build/patches"
-          cd kernel_workspace/common
-          
-          if [[ "${{ env.CPU }}" == sm* ]]; then
-            echo "🔧 Applying IPv6 NAT fix for Snapdragon..."
-            patch -p1 -F 3 < "${PATCH_DIR}/IPv6_NAT_FIX.patch" || true
-            echo "✅ IPv6 NAT fix applied"
-          else
-            echo "⏭️  Skipping IPv6 NAT fix (not Snapdragon)"
-          fi
-
       - name: Custom BUILD_TIME
         shell: bash
         run: |
@@ -750,11 +735,11 @@ jobs:
 
           echo "🔨 Starting kernel build with ThinLTO..."
           if [ -f "build/build.sh" ]; then
-            LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
+            LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
           else
             tools/bazel build \
               --config=fast \
-              --lto=thin \
+              --lto=none \
               --action_env=KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP}" \
               --action_env=KBUILD_BUILD_VERSION="1" \
               --action_env=KBUILD_BUILD_USER="kleaf" \
