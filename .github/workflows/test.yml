@@ -30,13 +30,13 @@ on:
         type: boolean
         description: "Use SUSFS dev branch?"
         required: false
-        default: false      
+        default: false
 
       BUILD_TIME:
         type: string
         description: "Custom build time (enter 'F' to use current UTC time)"
         required: false
-        default: "Thu Dec 11 04:17:27 UTC 2025"
+        default: "Sun Feb 01 00:00:27 UTC 2026"
 
       KSU_META:
         type: string
@@ -562,7 +562,7 @@ jobs:
             set_cfg CONFIG_KSU_SUSFS n
           fi
 
-          # TMPFS
+          # TMPFS (CRITIQUE POUR BOOT!)
           set_cfg CONFIG_TMPFS_XATTR y
           set_cfg CONFIG_TMPFS_POSIX_ACL y
 
@@ -640,6 +640,21 @@ jobs:
           fi
           echo "✅ Unicode bypass fix applied"
 
+      - name: Fix IPv6 NAT Error (CRITIQUE!)
+        shell: bash
+        run: |
+          set -euo pipefail
+          PATCH_DIR="${GITHUB_WORKSPACE}/Action-Build/patches"
+          cd kernel_workspace/common
+          
+          if [[ "${{ env.CPU }}" == sm* ]]; then
+            echo "🔧 Applying IPv6 NAT fix for Snapdragon..."
+            patch -p1 -F 3 < "${PATCH_DIR}/IPv6_NAT_FIX.patch" || true
+            echo "✅ IPv6 NAT fix applied"
+          else
+            echo "⏭️  Skipping IPv6 NAT fix (not Snapdragon)"
+          fi
+
       - name: Custom BUILD_TIME
         shell: bash
         run: |
@@ -673,7 +688,7 @@ jobs:
               
               # Remplacer la ligne UTS_VERSION
               if grep -q 'UTS_VERSION=' "$f"; then
-                sed -i "s|UTS_VERSION=.*|UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"|" "$f"
+                perl -pi -e "s{UTS_VERSION=\"\\\$\\(.*?\\)\"}{UTS_VERSION=\"#1 SMP PREEMPT $DATESTR\"}" "$f"
                 echo "  ✅ UTS_VERSION patched in $f"
               fi
               
@@ -697,7 +712,19 @@ jobs:
           
           echo "✅ Build time configured: $DATESTR"
 
-      - name: Protected Modules
+      - name: Fix SUSFS header (6.6+)
+        if: ${{ env.KV1 == '6' && env.KV2 == '6' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd kernel_workspace/common
+          if [ -f "fs/proc/base.c" ]; then
+            echo "🔧 Fixing SUSFS header for 6.6..."
+            sed -i '/#include "fd.h"/a #include <linux/susfs.h>' fs/proc/base.c
+            echo "✅ SUSFS header fixed"
+          fi
+
+      - name: Protected Modules (6.12)
         shell: bash
         run: |
           set -euo pipefail
@@ -733,7 +760,7 @@ jobs:
           export KBUILD_BUILD_USER="kleaf"
           export KBUILD_BUILD_HOST="build-host"
 
-          echo "🔨 Starting kernel build with ThinLTO..."
+          echo "🔨 Starting kernel build..."
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh 2>&1 | tee build.log
           else
@@ -1075,6 +1102,7 @@ jobs:
           - ✅ LSM (Baseband Guard)
           - ✅ IPSET & IPv6 NAT
           - ✅ Unicode Bypass Fix
+          - ✅ IPv6 NAT Fix (Snapdragon)
           EOF
 
       - name: Post-build Disk Check
