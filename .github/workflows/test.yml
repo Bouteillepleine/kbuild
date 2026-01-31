@@ -1,4 +1,4 @@
-name: Build OnePlus 15 Kernel (SukiSU Ultra + SUSFS)
+name: Build OnePlus 15 Kernel
 
 permissions:
   contents: write
