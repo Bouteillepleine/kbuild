@@ -1,4 +1,4 @@
-name: Build GKI_SukiSU Ultra All
+name: Build Oneplus 15 Kernels
 
 on:
   workflow_dispatch:
@@ -55,11 +55,6 @@ on:
         description: "Custom kernel SUBLEVEL spoofing"
         required: false
         default: ""
-      FAST_BUILD:
-        type: boolean
-        description: "Enable fast build?"
-        required: false
-        default: false
       LSM:
         type: boolean
         description: "Enable critical partition write protection module (BBG)?"
@@ -98,7 +93,7 @@ on:
 
 jobs:
   build:
-    name: ${{ github.event.inputs.FAST_BUILD == 'true' && '[FAST]' || '' }}${{ github.event.inputs.KPM == 'KPM' && '[KPM]' || '' }}${{ github.event.inputs.LSM == 'true' && '[LSM]' || '' }} For ${{ github.event.inputs.FILE }}
+    name: ${{ github.event.inputs.KPM == 'KPM' && '[KPM]' || '' }}${{ github.event.inputs.LSM == 'true' && '[LSM]' || '' }} For ${{ github.event.inputs.FILE }}
     runs-on: ubuntu-latest
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
@@ -145,7 +140,6 @@ jobs:
           echo "Selected NETFILTER: ${{ github.event.inputs.NETFILTER }}"
           echo "Selected BBR_ECN: ${{ github.event.inputs.BBR_ECN }}"
           echo "Selected SUSFS_DEV: ${{ github.event.inputs.SUSFS_DEV }}"
-          echo "Selected FAST_BUILD: ${{ github.event.inputs.FAST_BUILD }}"          
           echo "Selected UNICODE_BYPASS: ${{ github.event.inputs.UNICODE_BYPASS }}"          
           echo "-----------------------"
 
@@ -184,7 +178,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ env.BUILD_METHOD }}-${{ github.event.inputs.FAST_BUILD == 'true' && 'alpha' || 'beta' }}-16
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ env.BUILD_METHOD }}-standard-16
 
       - name: Initialize Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
@@ -308,7 +302,6 @@ jobs:
           cd kernel_workspace
           SUFFIX="${{ github.event.inputs.SUFFIX }}"
           KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
-          FAST_BUILD="${{ github.event.inputs.FAST_BUILD }}"
 
           for path in \
             common/scripts/setlocalversion \
@@ -327,13 +320,8 @@ jobs:
 
             elif grep -q 'echo "\$res"' "$path"; then
               echo "Detected OLD setlocalversion format"
-              if [ "$FAST_BUILD" = "true" ]; then
-                echo "FAST_BUILD enabled: using static res"
-                sed -i "s/^res=.*/res=\"-${KANDROID_VERSION}-${SUFFIX}\"/" "$path"
-              else
-                echo "Standard build: injecting suffix via cut/echo"
-                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
-              fi
+              echo "Standard build: injecting suffix via cut/echo"
+              tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
             else
               echo "Unknown format, appending echo manually"
               echo "echo \"\$res-${SUFFIX}\"" >> "$path"
@@ -347,7 +335,6 @@ jobs:
         run: |
           cd kernel_workspace
           KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
-          FAST_BUILD="${{ github.event.inputs.FAST_BUILD }}"
 
           RANDOM_DIGIT=$(od -An -N1 -tu1 < /dev/urandom | tr -d '[:space:]' | awk '{print $1 % 11}')
           RANDOM_HASH=$(od -An -N7 -tx1 /dev/urandom | tr -d ' \n')
@@ -370,13 +357,8 @@ jobs:
 
             elif grep -q 'echo "\$res"' "$path"; then
               echo "Detected OLD setlocalversion format"
-              if [ "$FAST_BUILD" = "true" ]; then
-                echo "FAST_BUILD enabled: using static res with random suffix"
-                sed -i "s/^res=.*/res=\"-${KANDROID_VERSION}-${RANDOM_SUFFIX}\"/" "$path"
-              else
-                echo "Standard build: injecting random suffix via cut/echo"
-                tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${RANDOM_SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
-              fi
+              echo "Standard build: injecting random suffix via cut/echo"
+              tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${RANDOM_SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
             else
               echo "Unknown format, appending echo manually"
               echo "echo \"\$res-${RANDOM_SUFFIX}\"" >> "$path"
@@ -718,64 +700,7 @@ jobs:
         run: |
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' kernel_workspace/common/BUILD.bazel
 
-      - name: Build Kernel FAST
-        if: ${{ github.event.inputs.FAST_BUILD == 'true' }}
-        id: fast_build
-        run: |
-          cd kernel_workspace
-
-          if [[ -f ./common/build.config.arm ]] && grep -q '^LLVM_IAS=1' ./common/build.config.arm; then
-            USE_LLVM_IAS=true
-          else
-            USE_LLVM_IAS=false
-          fi
-
-          CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common | cut -d'=' -f2 || true)
-          if [[ -z "$CLANG_PREBUILT_BIN" ]]; then
-            echo "⚠️ CLANG_PREBUILT_BIN not found, falling back"
-            echo "fallback=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "$CLANG_PREBUILT_BIN" =~ (clang-r[0-9a-z]+) ]]; then
-            CLANG_VERSION="${BASH_REMATCH[1]}"
-          else
-            if [[ -f ./common/build.config.constants ]]; then
-              CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
-            fi
-          fi
-
-          if [[ -z "$CLANG_VERSION" ]]; then
-            echo "⚠️ Unable to get Clang version, falling back"
-            echo "fallback=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          CLANG_PREBUILT_BIN=${CLANG_PREBUILT_BIN/\$\{CLANG_VERSION\}/$CLANG_VERSION}
-
-          echo "✅ CLANG_VERSION=$CLANG_VERSION"
-          echo "✅ USE_LLVM_IAS=$USE_LLVM_IAS"
-
-          export PATH="$GITHUB_WORKSPACE/kernel_workspace/$CLANG_PREBUILT_BIN:$PATH"
-          export PATH="/usr/lib/ccache:$PATH"
-          export CC="ccache clang"
-
-          cd ./common
-          MAKE_ARGS="LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
-            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
-            LD=ld.lld HOSTLD=ld.lld KCFLAGS+=-Wno-error"
-
-          if [[ "$USE_LLVM_IAS" == "true" ]]; then
-            MAKE_ARGS="LLVM_IAS=1 $MAKE_ARGS"
-          fi
-
-          make -j$(nproc --all) O=out $MAKE_ARGS gki_defconfig
-          make -j$(nproc --all) O=out $MAKE_ARGS
-          ccache -s
-
-      - name: Fallback to Build Kernel
-        if: ${{ github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true' }}
+      - name: Build Kernel
         run: |
           cd kernel_workspace
           set -ex
@@ -947,7 +872,6 @@ jobs:
           | **SUSFS Version** | ${SUSFS_VERSION} |
           | **SUSFS Branch** | ${SUSFS_BRANCH_NAME} |
           | **SUSFS Dev Mode** | ${{ github.event.inputs.SUSFS_DEV == 'true' && '✅ Yes' || '❌ No' }} |
-          | **Fast Build** | ${{ github.event.inputs.FAST_BUILD == 'true' && '✅ Yes' || '❌ No' }} |
           | **Ccache** | ${{ github.event.inputs.BUILD_NOCCACHE == 'true' && '❌ Disabled' || '✅ Enabled' }} |
           | **Build Time** | ${BUILD_TIME} |
           | **Warnings** | ${WARNINGS_COUNT} |
