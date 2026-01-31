@@ -42,7 +42,7 @@ on:
         type: string
         description: "Custom kernel suffix (leave empty to use a random suffix)"
         required: false
-        default: " 5-ga5f232d1ead0-ab14083253-4k"
+        default: ""
 
       SUBLEVEL:
         type: string
@@ -261,11 +261,11 @@ jobs:
             sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$path"
 
             if grep -q 'KERNELVERSION.*scm_version' "$path"; then
-              sed -i "s|echo \"\${KERNELVERSION}.*scm_version}\"|echo \"\${KERNELVERSION}-${KANDROID_VERSION}-${SUFFIX}\"|" "$path"
+              sed -i "s|echo \"\${KERNELVERSION}.*scm_version}\"|echo \"\${KERNELVERSION}-${KANDROID_VERSION}${SUFFIX}\"|" "$path"
             elif grep -q 'echo "\$res"' "$path"; then
-              tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
+              tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
             else
-              echo "echo \"\$res-${SUFFIX}\"" >> "$path"
+              echo "echo \"\$res${SUFFIX}\"" >> "$path"
             fi
             chmod +x "$path"
           done
@@ -282,12 +282,15 @@ jobs:
           RANDOM_DIGIT="$(od -An -N1 -tu1 < /dev/urandom | tr -d '[:space:]' | awk '{print $1 % 11}')"
           RANDOM_HASH="$(od -An -N7 -tx1 /dev/urandom | tr -d ' \n')"
           RANDOM_SUFFIX="${RANDOM_DIGIT}-o-g${RANDOM_HASH}"
+          echo "🎲 Generated random suffix: $RANDOM_SUFFIX"
 
           for path in \
             common/scripts/setlocalversion \
             msm-kernel/scripts/setlocalversion \
             external/dtc/scripts/setlocalversion; do
             [ -f "$path" ] || continue
+            echo "🔧 Modifying: $path"
+            
             sed -i 's/ -dirty//g' "$path"
             sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$path"
 
@@ -301,9 +304,16 @@ jobs:
             chmod +x "$path"
           done
 
-          git add -A
-          git diff --cached --quiet || git commit -m "Random suffix & remove -dirty"
-          echo "✅ Random suffix applied: $RANDOM_SUFFIX"
+          # Commit in the 'common' subdirectory (which is a git repo)
+          if [ -d "common/.git" ]; then
+            echo "📝 Committing changes in common/"
+            cd common
+            git add scripts/setlocalversion 2>/dev/null || true
+            git diff --cached --quiet || git commit -m "Apply random suffix & remove -dirty" || true
+            cd ..
+          fi
+          
+          echo "✅ Random suffix applied: $RANDOM_SUFFIX"      
 
       - name: Add KernelSU (ReSukiSU or SukiSU Ultra)
         shell: bash
@@ -567,12 +577,14 @@ jobs:
           done
           echo "✅ Build time set: $DATESTR"
 
-      - name: Fix 6.12        
+      - name: Fix 6.12 Protected Modules
         shell: bash
         run: |
           set -euo pipefail
+          echo "🔧 Disabling protected modules check for 6.12..."
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' \
             kernel_workspace/common/BUILD.bazel
+          echo "✅ Protected modules check disabled"
 
       - name: Clean build (optional)
         if: ${{ github.event.inputs.clean_build == true }}
@@ -661,13 +673,10 @@ jobs:
           cp "${{ env.IMAGE_PATH }}" ./AnyKernel3/Image
           echo "✅ AnyKernel3 prepared"
 
-      - name: Apply KPM patch (if needed)
+      - name: Apply KPM patch
         shell: bash
         run: |
           set -euo pipefail
-          
-          # Check if we need to apply patch_linux for KPM
-          # This is typically needed when KPM is enabled
           
           PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
           if [ -f "${PATCH_DIR}/patch_linux" ]; then
@@ -680,7 +689,7 @@ jobs:
             mv oImage Image 2>/dev/null || true
             echo "✅ KPM patch applied"
           else
-            echo "⏭️  No KPM patch needed"
+            echo "⏭️  No KPM patch found"
           fi
 
       - name: Create ZIP
