@@ -1,4 +1,4 @@
-name: Build
+name: Build OnePlus 15 Kernel
 
 permissions:
   contents: write
@@ -50,7 +50,7 @@ jobs:
       OP_IP_SET: "true"
       OP_UNAME: "5-g188c695beb6d-ab14367805-4k"
 
-      # Aliases used by your SUSFS logic
+      # Aliases used by SUSFS logic
       ANDROID_VER: "android16"
       KERNEL_VER: "6.12"
 
@@ -100,8 +100,6 @@ jobs:
             sudo chmod +x "$REPO"
           fi
           echo "REPO=$REPO" >> "$GITHUB_ENV"
-
-          echo "CONFIG=$GITHUB_WORKSPACE/OP15" >> "$GITHUB_ENV"
 
           git config --global feature.manyFiles true
           git config --global core.fsmonitor true
@@ -166,7 +164,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Detect kernel version"
-          cd OP15/kernel_platform/common
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform/common"
 
           VERSION=$(awk '/^VERSION *=/ {print $3}' Makefile)
           PATCHLEVEL=$(awk '/^PATCHLEVEL *=/ {print $3}' Makefile)
@@ -292,23 +290,23 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Clean ABI exports"
-          cd "$CONFIG/kernel_platform"
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
           rm -f common/android/abi_gki_protected_exports_* || true
           rm -f msm-kernel/android/abi_gki_protected_exports_* || true
           sed -i 's/protected_modules = \[.*\]/protected_modules = []/' common/modules.bzl || true
           echo "::endgroup::"
 
-      - name: Add SukiSU Ultra
+      - name: 🔧 Add SukiSU Ultra
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Add SukiSU Ultra"
-          cd "$CONFIG/kernel_platform"
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
 
           META="${{ inputs.ksu_meta }}"
           if [[ "$(grep -o '/' <<< "$META" | wc -l)" -lt 2 ]]; then
             echo "::error::Invalid 'ksu_meta' format. Expected: branch/custom_tag/commit_hash"
-            echo "Example: susfs-main/Ultra/abc12345"
+            echo "Example: builtin/⚡Ultra⚡/abc12345"
             exit 1
           fi
 
@@ -408,15 +406,13 @@ jobs:
           sed -i '/KSU_VERSION_API :=/d' kernel/Makefile
           sed -i '/KSU_VERSION_FULL :=/d' kernel/Makefile
 
-          VERSION_DEFINITIONS=$(cat <<EOF
-            define get_ksu_version_full
-            $VERSION_FULL
-            endef
-
-            KSU_VERSION_API := $KSU_API_VERSION
-            KSU_VERSION_FULL := $VERSION_FULL
-          EOF
-          )
+          # ✅ FIX: Use echo instead of here-document
+          VERSION_DEFINITIONS="define get_ksu_version_full
+          $VERSION_FULL
+          endef
+          
+          KSU_VERSION_API := $KSU_API_VERSION
+          KSU_VERSION_FULL := $VERSION_FULL"
 
           awk -v def="$VERSION_DEFINITIONS" '
             /REPO_OWNER :=/ {print; print def; inserted=1; next}
@@ -439,7 +435,7 @@ jobs:
           echo "   Manager: v$KSU_VERSION"
           echo "::endgroup::"
 
-      - name: Apply SUSFS Patches
+      - name: 🔒 Apply SUSFS Patches
         shell: bash
         run: |
           set -euo pipefail
@@ -456,7 +452,7 @@ jobs:
             exit 1
           fi
       
-          cd "$CONFIG/kernel_platform"
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
       
           SUSFS_PATCH="50_add_susfs_in_gki-${ANDROID_VER}-${KERNEL_VER}.patch"
           SRC_PATCH="$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/$SUSFS_PATCH"
@@ -514,14 +510,14 @@ jobs:
       
           echo "✅ SUSFS step complete (tolerant). SUSFS version: ${SUSFS_VERSION:-unknown}"
           echo "::endgroup::"
-
-      - name: Add BBG
+          
+      - name: 🛡️ Add BBG (Optional)
         if: ${{ env.OP_BBG == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Add BBG LSM"
-          cd "$CONFIG/kernel_platform"
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
           if ! wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash -s fix_blkdev_rename; then
             echo "::warning::BBG setup script failed, continuing anyway"
           fi
@@ -529,16 +525,17 @@ jobs:
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' common/security/Kconfig
           echo "::endgroup::"
 
-      - name: Add SukiSU + SUSFS config (gki_defconfig)
+      - name: ⚙️ Configure Kernel (gki_defconfig)
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Kernel config"
-          cd "$CONFIG/kernel_platform"
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
           DEFCONFIG="common/arch/arm64/configs/gki_defconfig"
 
           add_cfg() { grep -qxF "$1" "$DEFCONFIG" || echo "$1" >> "$DEFCONFIG"; }
 
+          # SukiSU + SUSFS
           add_cfg "CONFIG_KSU=y"
           add_cfg "CONFIG_KSU_KPROBES_HOOK=n"
           add_cfg "CONFIG_KSU_SUSFS=y"
@@ -561,6 +558,7 @@ jobs:
           add_cfg "CONFIG_TMPFS_XATTR=y"
           add_cfg "CONFIG_TMPFS_POSIX_ACL=y"
 
+          # BBR TCP
           if [ "${OP_BBR}" = "true" ]; then
             add_cfg "CONFIG_TCP_CONG_ADVANCED=y"
             add_cfg "CONFIG_TCP_CONG_BBR=y"
@@ -568,12 +566,14 @@ jobs:
             add_cfg "CONFIG_NET_SCH_FQ_CODEL=y"
           fi
 
+          # TTL Manipulation
           if [ "${OP_TTL}" = "true" ]; then
             add_cfg "CONFIG_IP_NF_TARGET_TTL=y"
             add_cfg "CONFIG_IP6_NF_TARGET_HL=y"
             add_cfg "CONFIG_IP6_NF_MATCH_HL=y"
           fi
 
+          # IP_SET
           if [ "${OP_IP_SET}" = "true" ]; then
             add_cfg "CONFIG_IP_SET=y"
             add_cfg "CONFIG_IP_SET_MAX=65534"
@@ -595,12 +595,22 @@ jobs:
             add_cfg "CONFIG_IP_SET_LIST_SET=y"
           fi
 
-          add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y"
-          add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n"
+          # ✅ FIX: Apply optimization level from input
+          if [ "${{ inputs.optimize_level }}" = "O3" ]; then
+            add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y"
+            add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=n"
+            echo "✅ Using O3 optimization"
+          else
+            add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y"
+            add_cfg "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n"
+            echo "✅ Using O2 optimization"
+          fi
+
           add_cfg "CONFIG_OPTIMIZE_INLINING=y"
           add_cfg "CONFIG_FRAME_WARN=0"
           add_cfg "CONFIG_TRACEPOINTS=y"         
 
+          # Disable debug options
           add_cfg "CONFIG_DEBUG_KERNEL=n"
           add_cfg "CONFIG_DEBUG_INFO=n"
           add_cfg "CONFIG_GDB_SCRIPTS=n"
@@ -616,7 +626,7 @@ jobs:
           echo "✅ Kernel configured"
           echo "::endgroup::"
 
-      - name: Modules
+      - name: 🔧 Fix Bazel Defconfig Check
         shell: bash
         run: |
           set -euo pipefail
@@ -625,69 +635,63 @@ jobs:
             "$GITHUB_WORKSPACE/OP15/kernel_platform/common/BUILD.bazel"
           echo "::endgroup::"
 
-      - name: Fix Kleaf
+      - name: 🔧 Fix Kleaf py3-cmd
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Fix Kleaf py3-cmd"
-      
+          
           KP="$GITHUB_WORKSPACE/OP15/kernel_platform"
           MUSL="$KP/prebuilts/build-tools/linux_musl-x86/bin"
           X86="$KP/prebuilts/build-tools/linux-x86/bin"
-      
+          
           echo "Checking for py3-cmd..."
           ls -la "$MUSL" || true
           ls -la "$X86" || true
-      
+          
           if [ -x "$MUSL/py3-cmd" ]; then
             echo "✅ linux_musl-x86 py3-cmd already exists"
             echo "::endgroup::"
             exit 0
           fi
-      
+          
           mkdir -p "$MUSL"
-      
+          
           if [ -x "$X86/py3-cmd" ]; then
             echo "Creating symlink linux_musl-x86/bin/py3-cmd -> linux-x86/bin/py3-cmd"
             ln -sf "$X86/py3-cmd" "$MUSL/py3-cmd"
             chmod +x "$MUSL/py3-cmd" || true
           else
             echo "linux-x86 py3-cmd not found; generating minimal wrapper that calls python3"
-            cat > "$MUSL/py3-cmd" <<'EOF'
-            #!/usr/bin/env bash
-            exec python3 "$@"
-            EOF
+            echo '#!/usr/bin/env bash' > "$MUSL/py3-cmd"
+            echo 'exec python3 "$@"' >> "$MUSL/py3-cmd"
             chmod +x "$MUSL/py3-cmd"
           fi
-      
+          
           echo "✅ py3-cmd is now present at: $MUSL/py3-cmd"
           "$MUSL/py3-cmd" -c 'import sys; print(sys.version)' >/dev/null 2>&1 || true
           echo "::endgroup::"
 
-
-      - name: Build the Kernel
+      - name: 🏗️ Build the Kernel
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Build kernel"
       
-          cd "$CONFIG/kernel_platform"
+          cd "$GITHUB_WORKSPACE/OP15/kernel_platform"
+          
           if [ "${{ inputs.clean_build }}" = "true" ]; then
             echo "Clean build: removing output directories..."
             rm -rf common/out out bazel-out bazel-bin bazel-testlogs 2>/dev/null || true
-          fi
-      
-          # Optional: disable ccache in "clean_build" mode
-          if [ "${{ inputs.clean_build }}" = "true" ]; then
             export CCACHE_DISABLE=1
             echo "Clean build requested: CCACHE_DISABLE=1"
           else
-            export PATH="/usr/lib/ccache:${PATH}"
-            export CC="ccache clang"
-            export CXX="ccache clang++"
+            export CCACHE_DIR="$HOME/.ccache"
+            export USE_CCACHE=1
+            echo "Using ccache from: $CCACHE_DIR"
           fi
       
-          # Resource monitor
+          # ✅ FIX: Better trap handling
           (stdbuf -oL bash -c '
             while true; do
               echo "=== $(date) ==="
@@ -701,7 +705,7 @@ jobs:
             done
           ') &
           MONITOR_PID=$!
-          trap "kill $MONITOR_PID" EXIT
+          trap "kill $MONITOR_PID 2>/dev/null || true" EXIT
       
           BUILD_START=$(date +%s)
       
@@ -710,7 +714,8 @@ jobs:
             --config=stamp \
             --lto=none \
             //common:kernel_aarch64_dist \
-            --verbose_failures
+            --verbose_failures \
+            --sandbox_debug
       
           BUILD_END=$(date +%s)
           BUILD_TIME=$((BUILD_END - BUILD_START))
@@ -722,55 +727,56 @@ jobs:
           echo "✅ Build finished in ${BUILD_TIME}s"
           echo "::endgroup::"
 
-      - name: Collect Build Stats
+      - name: 📊 Collect Build Stats
         shell: bash
         run: |
           set -euo pipefail
           echo "::group::Collect build stats"
       
-          # Try a few common locations (bazel vs make layouts differ)
+          KP="$GITHUB_WORKSPACE/OP15/kernel_platform"
+          
+          # ✅ FIX: Better Image detection with logging
+          echo "Searching for kernel Image..."
+          find "$KP" -name "Image" -type f 2>/dev/null || true
+          
           CANDIDATES=(
-            "$GITHUB_WORKSPACE/OP15/kernel_platform/common/out/arch/arm64/boot/Image"
-            "$GITHUB_WORKSPACE/OP15/kernel_platform/out/android16-6.12/dist/Image"
-            "$GITHUB_WORKSPACE/OP15/kernel_platform/bazel-bin/common/kernel_aarch64/Image"
-            "$(find "$GITHUB_WORKSPACE/OP15/kernel_platform" -path '*/dist/Image' -type f 2>/dev/null | head -n1)"
-            "$(find "$GITHUB_WORKSPACE/OP15/kernel_platform" -path '*/arch/arm64/boot/Image' -type f 2>/dev/null | head -n1)"
+            "$KP/bazel-bin/common/kernel_aarch64/Image"
+            "$KP/out/android16-6.12/dist/Image"
+            "$KP/common/out/arch/arm64/boot/Image"
+            "$(find "$KP/bazel-bin" -name "Image" -type f 2>/dev/null | head -n1)"
+            "$(find "$KP/out" -name "Image" -type f 2>/dev/null | head -n1)"
           )
       
           IMAGE_PATH=""
           for p in "${CANDIDATES[@]}"; do
             if [ -n "${p:-}" ] && [ -f "$p" ]; then
               IMAGE_PATH="$p"
+              echo "✅ Found Image at: $IMAGE_PATH"
               break
             fi
           done
       
           if [ -z "$IMAGE_PATH" ]; then
             echo "::error::Could not locate built Image"
+            echo "Directory structure:"
+            ls -laR "$KP/bazel-bin" 2>/dev/null || true
+            ls -laR "$KP/out" 2>/dev/null || true
             exit 1
           fi
       
           echo "IMAGE_PATH=$IMAGE_PATH" >> "$GITHUB_ENV"
-          echo "Image located at: $IMAGE_PATH"
       
           IMAGE_SHA256="$(sha256sum "$IMAGE_PATH" | awk '{print $1}')"
           echo "IMAGE_SHA256=$IMAGE_SHA256" >> "$GITHUB_ENV"
       
-          KERNEL_UNAME="$(strings "$IMAGE_PATH" | grep -E 'Linux version.*#' | tail -n1 || true)"
+          KERNEL_UNAME="$(strings "$IMAGE_PATH" | grep -E 'Linux version.*#' | tail -n1 || echo 'unknown')"
           echo "KERNEL_UNAME=$KERNEL_UNAME" >> "$GITHUB_ENV"
       
-          # Warnings count (best-effort)
+          # Warnings count
           WARNINGS_COUNT="0"
-          LOG_CANDIDATES=(
-            "$GITHUB_WORKSPACE/OP15/kernel_platform/common/build.log"
-            "$GITHUB_WORKSPACE/OP15/kernel_platform/build.log"
-          )
-          for l in "${LOG_CANDIDATES[@]}"; do
-            if [ -f "$l" ]; then
-              WARNINGS_COUNT="$(grep -ciE '\bwarning:' "$l" || true)"
-              break
-            fi
-          done
+          if [ -f "$KP/build.log" ]; then
+            WARNINGS_COUNT="$(grep -ciE '\bwarning:' "$KP/build.log" || true)"
+          fi
           echo "WARNINGS_COUNT=$WARNINGS_COUNT" >> "$GITHUB_ENV"
       
           echo "✅ Image SHA256: $IMAGE_SHA256"
@@ -788,10 +794,11 @@ jobs:
           cp "$IMAGE_PATH" "$GITHUB_WORKSPACE/AnyKernel3/Image"
           cd "$GITHUB_WORKSPACE/AnyKernel3"
       
-          : "${KSUVER:=unknown}"
-          : "${SUSVER:=nosusfs}"
+          # ✅ FIX: Default values for missing vars
+          KSUVER="${KSUVER:-unknown}"
+          SUSVER="${SUSVER:-nosusfs}"
       
-          ZIP_NAME="AK3_${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_SukiSU_${KSUVER}_SuSFS_${SUSVER}.zip"
+          ZIP_NAME="AK3_${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_SukiSU_${KSUVER}_SUSFS_${SUSVER}.zip"
       
           zip -r9 "$ZIP_NAME" ./* -x "*.git*" -x "$ZIP_NAME" -x "README.md"
       
@@ -802,6 +809,7 @@ jobs:
           echo "ZIP_SIZE=$(stat -c%s "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME")" >> "$GITHUB_ENV"
           echo "ZIP_SHA256=$(sha256sum "$GITHUB_WORKSPACE/artifacts/$ZIP_NAME" | awk '{print $1}')" >> "$GITHUB_ENV"
       
+          echo "✅ ZIP created: $ZIP_NAME"
           echo "::endgroup::"
 
       - name: 📤 Upload Artifact
@@ -818,9 +826,18 @@ jobs:
           set -euo pipefail
 
           KSU_REPO_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra"
+          
+          # ✅ FIX: Defaults for missing vars
+          SUSFS_COMMIT_SHA="${SUSFS_COMMIT_SHA:-unknown}"
+          SUSFS_BRANCH_NAME="${SUSFS_BRANCH_NAME:-unknown}"
+          KSUVER="${KSUVER:-unknown}"
+          SUSVER="${SUSVER:-unknown}"
+          KERNEL_UNAME="${KERNEL_UNAME:-unknown}"
+          BUILD_TIME="${BUILD_TIME:-0}"
+          WARNINGS_COUNT="${WARNINGS_COUNT:-0}"
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          # 🎉 OnePlus 15 Kernel Build Complete (SukiSU)
+          # 🎉 OnePlus 15 Kernel Build Complete (SukiSU Ultra)
 
           ## 📱 Device Information
           | Property | Value |
@@ -835,7 +852,7 @@ jobs:
           |-----------|----------------|
           | **SukiSU** | v${KSUVER} |
           | **SUSFS** | ${SUSVER} |
-          | **SUSFS Branch** | ${SUSFS_BRANCH_NAME:-unknown} |
+          | **SUSFS Branch** | ${SUSFS_BRANCH_NAME} |
           | **Optimization** | ${{ inputs.optimize_level }} |
           | **LTO** | ${OP_LTO} |
           | **Clean Build** | ${{ inputs.clean_build && '✅ Yes' || '❌ No' }} |
@@ -853,7 +870,7 @@ jobs:
           | Component | Commit |
           |-----------|--------|
           | **SukiSU** | [\`${KSU_COMMIT_SHA:0:8}\`](${KSU_REPO_URL}/commit/${KSU_COMMIT_SHA}) |
-          | **SUSFS** | [\`${SUSFS_COMMIT_SHA:0:8}\`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/${SUSFS_COMMIT_SHA}) |
+          | **SUSFS** | $([ "$SUSFS_COMMIT_SHA" != "unknown" ] && echo "[\\\`${SUSFS_COMMIT_SHA:0:8}\\\`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/${SUSFS_COMMIT_SHA})" || echo "N/A") |
           EOF
 
       - name: 🧹 Cleanup
