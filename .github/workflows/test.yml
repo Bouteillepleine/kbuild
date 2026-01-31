@@ -26,6 +26,18 @@ on:
         required: false
         default: ""
 
+      SUSFS_DEV:
+        type: boolean
+        description: "Use SUSFS dev branch?"
+        required: false
+        default: false
+
+      XUS_FIX:
+        type: boolean
+        description: "Apply XUS fix (No_5uS.patch)?"
+        required: false
+        default: false
+
       BUILD_TIME:
         type: string
         description: "Custom build time (enter 'F' to use current UTC time)"
@@ -42,7 +54,7 @@ on:
         type: string
         description: "Custom kernel suffix (leave empty to use a random suffix)"
         required: false
-        default: ""
+        default: "5-ga5f232d1ead0-ab14083253-4k"
 
       SUBLEVEL:
         type: string
@@ -114,6 +126,8 @@ jobs:
           echo "📦 Config Profile: ${{ github.event.inputs.FILE }}"
           echo "🔧 KSU Source: ${{ github.event.inputs.KSU_SOURCE }}"
           echo "🔐 SUSFS Commit: ${{ github.event.inputs.SUSFS_META || 'Disabled' }}"
+          echo "🧪 SUSFS Dev: ${{ github.event.inputs.SUSFS_DEV }}"
+          echo "🔧 XUS Fix: ${{ github.event.inputs.XUS_FIX }}"
           echo "📝 KSU Meta: ${{ github.event.inputs.KSU_META }}"
           echo "🕐 Build Time: ${{ github.event.inputs.BUILD_TIME }}"
           echo "🏷️  Suffix: ${{ github.event.inputs.SUFFIX || 'Random' }}"
@@ -240,7 +254,16 @@ jobs:
           NEW_VERSION="$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)"
           echo "TKERNEL_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
           echo "KERNEL_FULL_VER=$NEW_VERSION" >> "$GITHUB_ENV"
-          echo "✅ Kernel version: $NEW_VERSION"
+          
+          # Extract version components for later use
+          KV1=$(echo "$NEW_VERSION" | cut -d. -f1)
+          KV2=$(echo "$NEW_VERSION" | cut -d. -f2)
+          KV3=$(echo "$NEW_VERSION" | cut -d. -f3)
+          echo "KV1=$KV1" >> "$GITHUB_ENV"
+          echo "KV2=$KV2" >> "$GITHUB_ENV"
+          echo "KV3=$KV3" >> "$GITHUB_ENV"
+          
+          echo "✅ Kernel version: $NEW_VERSION (${KV1}.${KV2}.${KV3})"
 
       - name: Custom Kernel Suffix (if set)
         if: ${{ github.event.inputs.SUFFIX != '' }}
@@ -304,7 +327,6 @@ jobs:
             chmod +x "$path"
           done
 
-          # Commit in the 'common' subdirectory (which is a git repo)
           if [ -d "common/.git" ]; then
             echo "📝 Committing changes in common/"
             cd common
@@ -313,7 +335,7 @@ jobs:
             cd ..
           fi
           
-          echo "✅ Random suffix applied: $RANDOM_SUFFIX"      
+          echo "✅ Random suffix applied: $RANDOM_SUFFIX"
 
       - name: Add KernelSU (ReSukiSU or SukiSU Ultra)
         shell: bash
@@ -392,16 +414,42 @@ jobs:
           echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "✅ KernelSU version: $VERSION_FULL ($KSU_VERSION)"
 
-      - name: Apply SUSFS       
+      - name: Clone Patch Repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          
+          echo "📥 Cloning patch repositories..."
+          
+          # Clone Action-Build (for various patches)
+          if [ ! -d "Action-Build" ]; then
+            git clone https://github.com/Numbersf/Action-Build.git --depth=1
+            echo "✅ Action-Build cloned"
+          fi
+
+      - name: Apply SUSFS & Advanced Patches
+        if: ${{ github.event.inputs.SUSFS_META != '' }}
         shell: bash
         run: |
           set -euo pipefail
           cd kernel_workspace
 
-          echo "📥 Cloning SUSFS..."
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
+          # Clone SUSFS
+          SUSFS_BRANCH="gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
+          if [ "${{ github.event.inputs.SUSFS_DEV }}" = "true" ]; then
+            SUSFS_BRANCH="${SUSFS_BRANCH}-dev"
+          fi
+          
+          echo "📥 Cloning SUSFS (branch: $SUSFS_BRANCH)..."
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH" --depth=1
+          
           cd susfs4ksu
-          git checkout "${{ github.event.inputs.SUSFS_META }}" || true
+          SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
+          if [ -n "$SUSFS_META" ]; then
+            echo "📌 Checking out SUSFS commit: $SUSFS_META"
+            git checkout "$SUSFS_META" || echo "⚠️  Using latest upstream SUSFS"
+          fi
 
           SUSFS_COMMIT_SHA="$(git rev-parse HEAD)"
           SUSFS_BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
@@ -411,15 +459,90 @@ jobs:
           echo "SUSVER=$SUSVER" >> "$GITHUB_ENV"
           cd ..
 
+          # Copy SUSFS files
           echo "📋 Copying SUSFS files..."
-          cp "./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" ./common/ || true
-          cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/ || true
-          cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/ || true
+          PATCH_FILE="50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
+          cp "./susfs4ksu/kernel_patches/$PATCH_FILE" ./common/ || true
+          cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/ 2>/dev/null || true
+          cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/ 2>/dev/null || true
 
           cd ./common
+          GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
+          SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
+
+          # Fix for 5.15 legacy C library issues
+          if [ "$GKI_V" = "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
+            echo "🔧 Applying fix for 5.15.0~5.15.123 legacy C library bugs..."
+            cp ../../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
+            patch -p1 < fix_5.15.legacy.patch || true
+            echo "✅ fix_5.15 patch applied"
+          fi
+
+          # Fix for 6.6.0~6.6.30 missing TrustyOS
+          if [ "${{ env.KV1 }}" = "6" ] && [ "${{ env.KV2 }}" = "6" ] && [ "${{ env.KV3 }}" -le 30 ]; then
+            echo "🔍 Checking for TrustyOS in manifest..."
+            TRUSTY_EXISTS="false"
+            if [ -f "$GITHUB_WORKSPACE/.repo/manifests_fallback/${{ github.event.inputs.FILE }}.xml" ]; then
+              if grep -q 'common-modules/trusty' "$GITHUB_WORKSPACE/.repo/manifests_fallback/${{ github.event.inputs.FILE }}.xml"; then
+                TRUSTY_EXISTS="true"
+              fi
+            fi
+            
+            if [ "$TRUSTY_EXISTS" = "false" ]; then
+              echo "🔧 Fixing SUSFS patch for missing TrustyOS..."
+              sed -i 's/-32,12 +32,38/-32,11 +32,37/g' "$PATCH_FILE"
+              sed -i '/#include <trace\/hooks\/fs.h>/d' "$PATCH_FILE"
+              echo "✅ TrustyOS fix applied"
+            fi
+          fi
+
+          # Fake patch to fix potential failures
+          fake_patched=0
+          if [ "$GKI_V" = "android15-6.6" ]; then
+            if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
+              echo "🔧 Applying fake patch for android15-6.6..."
+              sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' \
+                     -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+              fake_patched=1
+            fi
+          fi
+          
+          if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
+            if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
+              echo "🔧 Applying fake patch for $GKI_V..."
+              fake_patched=1
+            fi
+          fi
+
+          # Apply SUSFS patch
           echo "🔧 Applying SUSFS patch..."
-          patch -p1 < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" || true
-          echo "✅ SUSFS applied: $SUSVER"
+          patch -p1 < "$PATCH_FILE" || true
+          echo "✅ SUSFS patch applied"
+
+          # Revert fake patches
+          if [ "$fake_patched" = 1 ]; then
+            echo "🔄 Reverting fake patches..."
+            if [ "$GKI_V" = "android15-6.6" ]; then
+              if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
+                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' \
+                       -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+              fi
+            fi
+            if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
+              if grep -qxF $'\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
+                sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
+              fi
+            fi
+            echo "✅ Fake patches reverted"
+          fi
+
+          # Apply XUS fix if enabled
+          if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
+            echo "🔧 Applying XUS fix (No_5uS.patch)..."
+            cp ../../Action-Build/patches/No_5uS.patch ./
+            patch -p1 < No_5uS.patch || true
+            echo "✅ XUS fix applied"
+          fi
 
       - name: Add Configuration Settings
         shell: bash
@@ -520,17 +643,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd kernel_workspace
+          PATCH_DIR="${GITHUB_WORKSPACE}/Action-Build/patches"
+          cd kernel_workspace/common
           
-          # Clone patches repo if not exists
-          if [ ! -d "Action-Build" ]; then
-            git clone https://github.com/Numbersf/Action-Build.git
-          fi
-          
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
-          cd common
-          
-          KV1=$(echo "${{ env.KERNEL_VERSION }}" | cut -d. -f1)
+          KV1="${{ env.KV1 }}"
           echo "🔧 Applying Unicode bypass fix (kernel $KV1.x)..."
           
           if [ "$KV1" -lt 6 ]; then
@@ -544,7 +660,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
+          PATCH_DIR="${GITHUB_WORKSPACE}/Action-Build/patches"
           cd kernel_workspace/common
           
           if [[ "${{ env.CPU }}" == sm* ]]; then
@@ -621,7 +737,6 @@ jobs:
           echo "::group::📊 Build Statistics"
           KP="${{ env.CONFIG }}"
 
-          # Check most likely locations first
           CANDIDATES=(
             "$KP/bazel-bin/common/kernel_aarch64_dist/Image"
             "$KP/bazel-bin/common/kernel_aarch64/Image"
@@ -637,7 +752,6 @@ jobs:
             fi
           done
 
-          # Fallback: comprehensive search
           if [ -z "$IMAGE_PATH" ]; then
             echo "🔍 Searching for Image..."
             IMAGE_PATH="$(find "$KP/bazel-bin" -name "Image" -type f 2>/dev/null | head -n1)"
@@ -687,7 +801,7 @@ jobs:
         run: |
           set -euo pipefail
           
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
+          PATCH_DIR="${GITHUB_WORKSPACE}/Action-Build/patches"
           if [ -f "${PATCH_DIR}/patch_linux" ]; then
             echo "🔧 Applying KPM patch_linux..."
             cd AnyKernel3
@@ -758,6 +872,8 @@ jobs:
           | **KSU Version** | v${{ env.KSUVER }} |
           | **SUSFS** | ${SUSVER} |
           | **SUSFS Branch** | ${SUSFS_BRANCH_NAME} |
+          | **SUSFS Dev** | ${{ github.event.inputs.SUSFS_DEV && '✅ Yes' || '❌ No' }} |
+          | **XUS Fix** | ${{ github.event.inputs.XUS_FIX && '✅ Applied' || '❌ Not applied' }} |
           | **LTO** | ${{ env.OP_LTO }} |
           | **Clean Build** | ${{ github.event.inputs.clean_build && '✅ Yes' || '❌ No' }} |
           | **Ccache** | ${{ github.event.inputs.BUILD_NOCCACHE && '❌ Disabled' || '✅ Enabled' }} |
@@ -781,6 +897,7 @@ jobs:
           - ✅ KernelSU (${{ github.event.inputs.KSU_SOURCE }})
           - ✅ KPM (Kernel Patch Manager)
           - $([ -n "${{ github.event.inputs.SUSFS_META }}" ] && echo "✅" || echo "❌") SUSFS
+          - $([ "${{ github.event.inputs.XUS_FIX }}" = "true" ] && echo "✅" || echo "❌") XUS Fix
           - ✅ BBR & ECN
           - ✅ LSM (Baseband Guard)
           - ✅ IPSET & IPv6 NAT
