@@ -54,7 +54,7 @@ on:
         type: string
         description: "Custom kernel suffix (leave empty to use a random suffix)"
         required: false
-        default: "5-ga5f232d1ead0-ab14083253-4k"
+        default: ""
 
       SUBLEVEL:
         type: string
@@ -284,11 +284,11 @@ jobs:
             sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' "$path"
 
             if grep -q 'KERNELVERSION.*scm_version' "$path"; then
-              sed -i "s|echo \"\${KERNELVERSION}.*scm_version}\"|echo \"\${KERNELVERSION}-${KANDROID_VERSION}${SUFFIX}\"|" "$path"
+              sed -i "s|echo \"\${KERNELVERSION}.*scm_version}\"|echo \"\${KERNELVERSION}-${KANDROID_VERSION}-${SUFFIX}\"|" "$path"
             elif grep -q 'echo "\$res"' "$path"; then
-              tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
+              tac "$path" | sed "0,/echo \"\\\$res\"/s//res=\\\$(echo \\\$res | cut -d- -f1-2)-${SUFFIX}; echo \"\\\$res\";/" | tac > "$path.tmp" && mv "$path.tmp" "$path"
             else
-              echo "echo \"\$res${SUFFIX}\"" >> "$path"
+              echo "echo \"\$res-${SUFFIX}\"" >> "$path"
             fi
             chmod +x "$path"
           done
@@ -428,7 +428,7 @@ jobs:
             echo "✅ Action-Build cloned"
           fi
 
-      - name: Apply SUSFS & Advanced Patches        
+      - name: Apply SUSFS & Advanced Patches
         shell: bash
         run: |
           set -euo pipefail
