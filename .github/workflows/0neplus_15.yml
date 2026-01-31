@@ -39,7 +39,7 @@ on:
         type: string
         description: "Custom build time (enter F to use current UTC time)"
         required: false
-        default: "Sun Feb 01 00:00:27 UTC 2026"
+        default: "Sun Feb 01 03:49:27 UTC 2026"
       KSU_META:
         type: string
         description: "Branch name (required) / custom version tag (optional) / rollback commit hash (optional)"
@@ -465,7 +465,7 @@ jobs:
         env:
           FILE: ${{ github.event.inputs.FILE }}
         run: |
-          # 🔧 CORRECTION SUSFS : Utiliser la même logique que le workflow qui fonctionne
+          # 🔧 CORRECTION SUSFS : Utiliser la logique qui fonctionne + détection intelligente de version
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
             echo "📥 Installing SUSFS..."
@@ -477,10 +477,45 @@ jobs:
             
             SUSFS_COMMIT_SHA="$(git rev-parse HEAD)"
             SUSFS_BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
+            SUSFS_SHORT_HASH="$(git rev-parse --short HEAD)"
+            
             echo "SUSFS_COMMIT_SHA=$SUSFS_COMMIT_SHA" >> $GITHUB_ENV
             echo "SUSFS_BRANCH_NAME=$SUSFS_BRANCH_NAME" >> $GITHUB_ENV
-            SUSVER="$(git describe --tags --always)"
+            
+            # 🔧 NOUVEAU : Détection intelligente de la version SUSFS selon la branche
+            echo "🔍 Detecting SUSFS version for branch: $SUSFS_BRANCH_NAME"
+            case "$SUSFS_BRANCH_NAME" in
+              *android16-6.12*)
+                SUSFS_VERSION="2.0.0"
+                echo "✅ Detected SUSFS 2.0.0 (Android 16 / Kernel 6.12)"
+                ;;
+              *android15-6.6*)
+                SUSFS_VERSION="1.5.x"
+                echo "✅ Detected SUSFS 1.5.x (Android 15 / Kernel 6.6)"
+                ;;
+              *android14-6.1*)
+                SUSFS_VERSION="1.4.x"
+                echo "✅ Detected SUSFS 1.4.x (Android 14 / Kernel 6.1)"
+                ;;
+              *android13-5.15*)
+                SUSFS_VERSION="1.4.x"
+                echo "✅ Detected SUSFS 1.4.x (Android 13 / Kernel 5.15)"
+                ;;
+              *android12-5.10*)
+                SUSFS_VERSION="1.4.x"
+                echo "✅ Detected SUSFS 1.4.x (Android 12 / Kernel 5.10)"
+                ;;
+              *)
+                # Fallback : essayer git describe, sinon utiliser 1.x
+                SUSFS_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.x")
+                echo "⚠️ Unknown branch, using fallback version: $SUSFS_VERSION"
+                ;;
+            esac
+            
+            # Construire la version complète
+            SUSVER="${SUSFS_VERSION}-${SUSFS_BRANCH_NAME}-${SUSFS_SHORT_HASH}"
             echo "SUSVER=$SUSVER" >> $GITHUB_ENV
+            echo "✅ SUSFS Version: $SUSVER"
             cd ..
           else
             echo "⏭️ SUSFS explicitly disabled (SUSFS_META=-1)"
@@ -691,7 +726,7 @@ jobs:
               fi
             fi
           done
-     
+
       - name: Modules        
         run: |
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' kernel_workspace/common/BUILD.bazel
