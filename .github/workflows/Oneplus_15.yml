@@ -15,8 +15,7 @@ on:
         description: "Manager source direction"
         required: true
         default: ReSuki
-        options:
-          - SukiSu
+        options:          
           - ReSuki          
       KPM:
         type: choice
