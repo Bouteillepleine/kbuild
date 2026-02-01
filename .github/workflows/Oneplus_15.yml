@@ -14,7 +14,7 @@ on:
         type: choice
         description: "Manager source direction"
         required: true
-        default: SukiSu
+        default: ReSuki
         options:
           - SukiSu
           - ReSuki          
@@ -500,6 +500,38 @@ jobs:
             patch -p1 < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
             echo "SUSFS patch applied"
           fi
+
+      # ✅ NOUVELLE ÉTAPE : Capture des métadonnées SUSFS
+      - name: 🔍 Capture SUSFS Metadata
+        if: ${{ github.event.inputs.SUSFS_META != '-1' }}
+        run: |
+          cd "$GITHUB_WORKSPACE/susfs4ksu"
+          
+          # Capturer le commit SHA
+          SUSFS_COMMIT=$(git rev-parse HEAD)
+          SUSFS_SHORT_COMMIT=$(git rev-parse --short HEAD)
+          echo "SUSFS_COMMIT_SHA=${SUSFS_COMMIT}" >> $GITHUB_ENV
+          echo "SUSFS_SHORT_COMMIT=${SUSFS_SHORT_COMMIT}" >> $GITHUB_ENV
+          
+          # Capturer la branche
+          SUSFS_BRANCH="gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}"
+          echo "SUSFS_BRANCH_NAME=${SUSFS_BRANCH}" >> $GITHUB_ENV
+          
+          # Capturer la version (depuis le README ou un fichier VERSION si disponible)
+          if [ -f "VERSION" ]; then
+            SUSFS_VER=$(cat VERSION | tr -d '\n')
+            echo "SUSVER=${SUSFS_VER}" >> $GITHUB_ENV
+          elif grep -q "SUSFS.*v[0-9]" README.md 2>/dev/null; then
+            SUSFS_VER=$(grep -oP "SUSFS.*v\K[0-9]+\.[0-9]+\.[0-9]+" README.md | head -1)
+            echo "SUSVER=${SUSFS_VER}" >> $GITHUB_ENV
+          else
+            echo "SUSVER=2.0.0+" >> $GITHUB_ENV
+          fi
+          
+          echo "✅ SUSFS Metadata captured:"
+          echo "  - Commit: ${SUSFS_COMMIT}"
+          echo "  - Branch: ${SUSFS_BRANCH}"
+          echo "  - Version: ${SUSVER:-2.0.0+}"
              
       - name: Apply UNICODE_BYPASS
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
@@ -638,8 +670,6 @@ jobs:
             fi
           done
 
-      # ⚠️ CORRECTION CRITIQUE : Pas de fix SUSFS header pour Android 16 !
-      # Le patch SUSFS 2.0.0 inclut déjà le header dans base.c
       - name: Fix Modules for Android 16
         if: ${{ contains(github.event.inputs.FILE, 'android16-6.12') }}
         run: |
@@ -744,14 +774,13 @@ jobs:
           echo "IMAGE_SHA256=${IMAGE_SHA256}" >> $GITHUB_ENV
           echo "IMAGE_SIZE=${IMAGE_SIZE}" >> $GITHUB_ENV
 
+      # ✅ ÉTAPE CORRIGÉE : Build Summary avec détection SUSFS correcte
       - name: 📊 Build Summary
         shell: bash
         run: |
           set -euo pipefail
           
-          SUSFS_COMMIT_SHA="${SUSFS_COMMIT_SHA:-N/A}"
-          SUSFS_BRANCH_NAME="${SUSFS_BRANCH_NAME:-N/A}"
-          SUSVER="${SUSVER:-N/A}"
+          # Variables de base
           KSU_COMMIT_SHA="${KSU_COMMIT_SHA:-N/A}"
           KSUVER="${KSUVER:-N/A}"
           TKERNEL_VERSION="${TKERNEL_VERSION:-N/A}"
@@ -764,38 +793,51 @@ jobs:
           IMAGE_SHA256="${IMAGE_SHA256:-N/A}"
           IMAGE_SIZE="${IMAGE_SIZE:-N/A}"
           
-          if [ "$SUSVER" != "N/A" ] && [ -n "$SUSVER" ]; then
+          # ✅ CORRECTION CRITIQUE : Détection SUSFS basée sur l'input utilisateur
+          if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_ENABLED="✅ Enabled"
-            SUSFS_VERSION="$SUSVER"
+            
+            # Utiliser les variables d'environnement capturées
+            SUSFS_VERSION="${SUSVER:-Latest upstream}"
+            SUSFS_BRANCH_NAME="${SUSFS_BRANCH_NAME:-gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}}"
+            SUSFS_COMMIT_SHA="${SUSFS_COMMIT_SHA:-Latest}"
+            
+            # Créer le lien vers le commit
+            if [ "$SUSFS_COMMIT_SHA" != "Latest" ] && [ "$SUSFS_COMMIT_SHA" != "N/A" ]; then
+              SUSFS_COMMIT_LINK="[\`${SUSFS_COMMIT_SHA:0:8}\`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/${SUSFS_COMMIT_SHA})"
+            else
+              SUSFS_COMMIT_LINK="Latest upstream"
+            fi
           else
             SUSFS_ENABLED="❌ Disabled"
             SUSFS_VERSION="N/A"
-          fi
-          
-          if [ "$SUSFS_COMMIT_SHA" != "N/A" ] && [ -n "$SUSFS_COMMIT_SHA" ]; then
-            SUSFS_COMMIT_LINK="[\`${SUSFS_COMMIT_SHA:0:8}\`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/${SUSFS_COMMIT_SHA})"
-          else
+            SUSFS_BRANCH_NAME="N/A"
+            SUSFS_COMMIT_SHA="N/A"
             SUSFS_COMMIT_LINK="N/A"
           fi
           
+          # Déterminer le repo KernelSU
           if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "ReSuki" ]; then
             KSU_REPO="ReSukiSU/ReSukiSU"
           else
             KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
           fi
           
+          # Créer le lien vers le commit KSU
           if [ "$KSU_COMMIT_SHA" != "N/A" ] && [ -n "$KSU_COMMIT_SHA" ]; then
             KSU_COMMIT_LINK="[\`${KSU_COMMIT_SHA:0:8}\`](https://github.com/${KSU_REPO}/commit/${KSU_COMMIT_SHA})"
           else
             KSU_COMMIT_LINK="N/A"
           fi
           
+          # Status des fonctionnalités
           KPM_STATUS="${{ github.event.inputs.KPM == 'KPM' && '✅ Enabled' || '❌ Disabled' }}"
           LSM_STATUS="${{ github.event.inputs.LSM == 'true' && '✅ Enabled' || '❌ Disabled' }}"
           BBR_ECN_STATUS="${{ github.event.inputs.BBR_ECN == 'true' && '✅ Enabled' || '❌ Disabled' }}"
           NETFILTER_STATUS="${{ github.event.inputs.NETFILTER == 'true' && '✅ Enabled (IPSET & IPv6 NAT)' || '❌ Disabled' }}"
           UNICODE_FIX_STATUS="${{ github.event.inputs.UNICODE_BYPASS == 'true' && '✅ Enabled' || '❌ Disabled' }}"
           
+          # Générer le résumé
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           # 🎉 GKI SukiSU Ultra Kernel Build Complete
           
