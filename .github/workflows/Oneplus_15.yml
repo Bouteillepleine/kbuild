@@ -465,14 +465,12 @@ jobs:
         env:
           FILE: ${{ github.event.inputs.FILE }}
         run: |
-          # 🔧 CORRECTION SUSFS : Utiliser la logique qui fonctionne + détection intelligente de version
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
             echo "📥 Installing SUSFS..."
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
             cd susfs4ksu
             
-            # Si SUSFS_META est vide, utiliser latest, sinon checkout le commit
             [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "✅ Using latest SUSFS"
             
             SUSFS_COMMIT_SHA="$(git rev-parse HEAD)"
@@ -482,7 +480,6 @@ jobs:
             echo "SUSFS_COMMIT_SHA=$SUSFS_COMMIT_SHA" >> $GITHUB_ENV
             echo "SUSFS_BRANCH_NAME=$SUSFS_BRANCH_NAME" >> $GITHUB_ENV
             
-            # 🔧 NOUVEAU : Détection intelligente de la version SUSFS selon la branche
             echo "🔍 Detecting SUSFS version for branch: $SUSFS_BRANCH_NAME"
             case "$SUSFS_BRANCH_NAME" in
               *android16-6.12*)
@@ -506,13 +503,11 @@ jobs:
                 echo "✅ Detected SUSFS 1.4.x (Android 12 / Kernel 5.10)"
                 ;;
               *)
-                # Fallback : essayer git describe, sinon utiliser 1.x
                 SUSFS_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.x")
                 echo "⚠️ Unknown branch, using fallback version: $SUSFS_VERSION"
                 ;;
             esac
             
-            # Construire la version complète
             SUSVER="${SUSFS_VERSION}-${SUSFS_BRANCH_NAME}-${SUSFS_SHORT_HASH}"
             echo "SUSVER=$SUSVER" >> $GITHUB_ENV
             echo "✅ SUSFS Version: $SUSVER"
@@ -525,7 +520,6 @@ jobs:
           git clone https://github.com/Numbersf/Action-Build.git
           cd kernel_workspace
           
-          # Appliquer les patches SUSFS
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             echo "Pulling susfs patches"
             cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
@@ -621,7 +615,6 @@ jobs:
             echo "CONFIG_KPM=y" >> "$CONFIG_FILE"
           fi
 
-          # 🔧 CORRECTION : Utiliser le même test que pour l'installation
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             echo "CONFIG_KSU_SUSFS=y" >> "$CONFIG_FILE"
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONFIG_FILE"
@@ -727,8 +720,12 @@ jobs:
             fi
           done
 
-      - name: Modules        
+      # ⚠️ CORRECTION CRITIQUE : Pas de fix SUSFS header pour Android 16 !
+      # Le patch SUSFS 2.0.0 inclut déjà le header dans base.c
+      - name: Fix Modules for Android 16
+        if: ${{ contains(github.event.inputs.FILE, 'android16-6.12') }}
         run: |
+          echo "🔧 Disabling module name protection for kernel 6.12"
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' kernel_workspace/common/BUILD.bazel
 
       - name: Build Kernel
