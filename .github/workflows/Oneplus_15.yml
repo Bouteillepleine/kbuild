@@ -462,127 +462,45 @@ jobs:
           echo "::endgroup::"
 
       - name: Apply Patches SukiSU Ultra
-        env:
-          FILE: ${{ github.event.inputs.FILE }}
         run: |
+          set -euo pipefail
+      
+          cd "$GITHUB_WORKSPACE"
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
-            echo "📥 Installing SUSFS..."
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
+      
+            echo "Installing SUSFS..."
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git \
+              -b "gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}"
+      
             cd susfs4ksu
-            
-            [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "✅ Using latest SUSFS"
-            
-            SUSFS_COMMIT_SHA="$(git rev-parse HEAD)"
-            SUSFS_BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD)"
-            SUSFS_SHORT_HASH="$(git rev-parse --short HEAD)"
-            
-            echo "SUSFS_COMMIT_SHA=$SUSFS_COMMIT_SHA" >> $GITHUB_ENV
-            echo "SUSFS_BRANCH_NAME=$SUSFS_BRANCH_NAME" >> $GITHUB_ENV
-            
-            echo "🔍 Detecting SUSFS version for branch: $SUSFS_BRANCH_NAME"
-            case "$SUSFS_BRANCH_NAME" in
-              *android16-6.12*)
-                SUSFS_VERSION="2.0.0"
-                echo "✅ Detected SUSFS 2.0.0 (Android 16 / Kernel 6.12)"
-                ;;
-              *android15-6.6*)
-                SUSFS_VERSION="1.5.x"
-                echo "✅ Detected SUSFS 1.5.x (Android 15 / Kernel 6.6)"
-                ;;
-              *android14-6.1*)
-                SUSFS_VERSION="1.4.x"
-                echo "✅ Detected SUSFS 1.4.x (Android 14 / Kernel 6.1)"
-                ;;
-              *android13-5.15*)
-                SUSFS_VERSION="1.4.x"
-                echo "✅ Detected SUSFS 1.4.x (Android 13 / Kernel 5.15)"
-                ;;
-              *android12-5.10*)
-                SUSFS_VERSION="1.4.x"
-                echo "✅ Detected SUSFS 1.4.x (Android 12 / Kernel 5.10)"
-                ;;
-              *)
-                SUSFS_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.x")
-                echo "⚠️ Unknown branch, using fallback version: $SUSFS_VERSION"
-                ;;
-            esac
-            
-            SUSVER="${SUSFS_VERSION}-${SUSFS_BRANCH_NAME}-${SUSFS_SHORT_HASH}"
-            echo "SUSVER=$SUSVER" >> $GITHUB_ENV
-            echo "✅ SUSFS Version: $SUSVER"
+            if [ -n "$SUSFS_META" ]; then
+              git checkout "$SUSFS_META"
+            else
+              echo "Using latest upstream SUSFS"
+            fi
             cd ..
           else
-            echo "⏭️ SUSFS explicitly disabled (SUSFS_META=-1)"
+            echo "SUSFS disabled (SUSFS_META=-1)"
           fi
-          
+      
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           git clone https://github.com/Numbersf/Action-Build.git
-          cd kernel_workspace
-          
+      
+          cd kernel_workspace/common
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            echo "Pulling susfs patches"
-            cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
-            cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
-            cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+            echo "Copying SUSFS patch set into kernel tree..."
+            cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" ./
+            cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/fs/"* ./fs/
+            cp "$GITHUB_WORKSPACE/susfs4ksu/kernel_patches/include/linux/"* ./include/linux/
+      
+            echo "Applying SUSFS patch..."
+            patch -p1 < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
+            echo "SUSFS patch applied"
           fi
-          
-          cd ./common
-          GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
-          SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
-
-          if [ "$GKI_V" == "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
-            echo "Fixing bugs for kernel 5.15.0~5.15.123"
-            cp ../../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
-            patch -p1 < fix_5.15.legacy.patch
-            echo "fix_5.15_patch complete"
-          fi
-
-          if [[ "${{ env.KV2 }}" == "66" && "${{ env.KV3 }}" -le 6630 && "${{ github.event.inputs.SUSFS_META }}" != "-1" ]]; then
-            TRUSTY_EXISTS="false"
-            if grep -q 'common-modules/trusty' "$GITHUB_WORKSPACE/kernel_workspace/.repo/manifests/default.xml" 2>/dev/null; then
-              TRUSTY_EXISTS="true"
-            fi
-            if [[ "$TRUSTY_EXISTS" == "false" ]]; then
-              echo "Fixing susfs error for kernel 6.6.0~6.6.30"
-              sed -i 's/-32,12 +32,38/-32,11 +32,37/g' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
-              sed -i '/#include <trace\/hooks\/fs.h>/d' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
-            fi
-          fi
-
-          if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            fake_patched=0
-            if [ "$GKI_V" = "android15-6.6" ] || [ "$GKI_V" = "android16-6.12" ]; then
-              if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                echo "Applying patch fix for ${GKI_V}"
-                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
-                fake_patched=1
-              fi
-            fi
-            if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
-              if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-                fake_patched=1
-              fi
-            fi
-
-            echo "Applying susfs patch"
-            patch -p1 < 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-            echo "susfs_patch complete"
-
-            if [ "$fake_patched" = 1 ]; then
-              if [ "$GKI_V" = "android15-6.6" ] || [ "$GKI_V" = "android16-6.12" ]; then
-                if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                  sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
-                fi
-              fi
-              if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
-                if grep -qxF $'\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
-                  sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
-                fi
-              fi
-            fi
-          fi
-
+             
       - name: Apply UNICODE_BYPASS
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
         run: |
