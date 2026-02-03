@@ -89,17 +89,7 @@ on:
         type: boolean
         description: "Add Unicode invisible character code point bypass for read vulnerability fix?"
         required: true
-        default: true
-      SCHED:
-        type: boolean
-        description: "Add Fengchi driver 1.0?"
-        required: true
-        default: false
-      ZRAM:
-        type: boolean
-        description: "Add more ZRAM algorithms?"
-        required: true
-        default: false
+        default: true     
       XUS_FIX:
         type: boolean
         description: "Prevent 5US error file generation?"
@@ -279,9 +269,7 @@ jobs:
           echo "Selected NETFILTER: ${{ github.event.inputs.NETFILTER }}"
           echo "Selected BBR_ECN: ${{ github.event.inputs.BBR_ECN }}"
           echo "Selected SUSFS_DEV: ${{ github.event.inputs.SUSFS_DEV }}"
-          echo "Selected FAST_BUILD: ${{ github.event.inputs.FAST_BUILD }}"
-          echo "Selected SCHED: ${{ github.event.inputs.SCHED }}"
-          echo "Selected ZRAM: ${{ github.event.inputs.ZRAM }}"
+          echo "Selected FAST_BUILD: ${{ github.event.inputs.FAST_BUILD }}"         
           echo "Selected UNICODE_BYPASS: ${{ github.event.inputs.UNICODE_BYPASS }}"
           echo "Selected XUS_FIX: ${{ github.event.inputs.XUS_FIX }}"
           echo "-----------------------"
@@ -541,8 +529,8 @@ jobs:
           [[ -n "$CUSTOM_TAG" ]] && echo "Custom version identifier: $CUSTOM_TAG" || echo "Custom version identifier: Not enabled"
           [[ -n "$MANUAL_HASH" ]] && echo "Manual hash specified: $MANUAL_HASH" || echo "Manual hash specified: Not enabled"
 
-          # curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
-          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
+          # curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
           cd ./KernelSU
 
           # If manual hash is specified, switch to that commit
@@ -625,14 +613,6 @@ jobs:
             cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           fi
 
-          if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
-            echo "Pulling zram patch"
-            cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./common/include/linux/
-            cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./common/lib/
-            cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./common/crypto/
-            cp -r ../SukiSU_patch/other/zram/lz4k_oplus ./common/lib/
-          fi
-
           cd ./common
           GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
           SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
@@ -695,24 +675,7 @@ jobs:
               cp ../../Action-Build/patches/No_5uS.patch ./
               patch -p1 < No_5uS.patch || true
             fi
-          fi
-
-      # Convert OGKI to GKI, no need to modify dtbo for boot
-      - name: Apply Convert HMBIRD_OGKI to HMBIRD_GKI
-        if: ${{ fromJSON(env.KV1) >= 6 && fromJSON(env.KV2) >= 66 && github.event.inputs.SCHED == 'false' }}
-        run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
-          cd kernel_workspace/kernel_platform/common
-          for p in ./kernel/sched/hmbird* ./vendor/oplus/kernel/cpu/sched_ext/hmbird*; do
-            [ -d "$p" ] && {
-              echo "Fengchi code already exists in source code, enabling secondary rollback"
-              exit 0
-            }
-          done
-          sed -i '1iobj-y += hmbird_patch.o' drivers/Makefile
-          echo "Applying OGKI to GKI conversion patch"
-          patch -p1 -F 3 < "${PATCH_DIR}/hmbird_patch.patch" || true
-          echo "OGKI to GKI conversion patch complete"
+          fi      
 
       - name: Apply UNICODE_BYPASS
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
@@ -724,38 +687,7 @@ jobs:
           else
             patch -p1 --forward < "${PATCH_DIR}/unicode_bypass_fix_6.1+.patch" || true
           fi
-
-      - name: Apply ZRAM
-        if: ${{ github.event.inputs.ZRAM == 'true' }}
-        run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}"
-          cd kernel_workspace/kernel_platform/common
-          echo "Applying lz4kd patch"
-          patch -p1 -F 3 < "${PATCH_DIR}/lz4kd.patch" || true
-          echo 'lz4kd_patch complete'
-          echo "Applying lz4k_oplus patch"
-          patch -p1 -F 3 < "${PATCH_DIR}/lz4k_oplus.patch" || true
-          echo 'lz4k_oplus_patch complete'
-
-      - name: Apply SCHED
-        env:
-          FILE: ${{ github.event.inputs.FILE }}
-        if: ${{ github.event.inputs.SCHED == 'true' }}
-        run: |
-          cd kernel_workspace/kernel_platform/common
-          git clone https://github.com/Numbersf/SCHED_PATCH.git -b $CPU || { echo "❌ CPU branch does not exist, Fengchi kernel does not support your device yet, please disable and retry"; exit 11; }
-          echo "Pulling Fengchi patch"
-          cp ./SCHED_PATCH/fengchi_${FILE}.patch ./
-          if [[ -f "fengchi_${FILE}.patch" ]]; then
-            echo "Applying Fengchi patch"
-            dos2unix "fengchi_${FILE}.patch"
-            patch -p1 -F 3 < "fengchi_${FILE}.patch"
-            echo "fengchi_patch complete"
-          else
-            echo "❌ No matching patch found, Fengchi kernel does not support your device yet, please disable and retry"
-            exit 12
-          fi
-
+     
       - name: Apply LSM_BBG
         if: ${{ github.event.inputs.LSM == 'true' }}
         run: |
@@ -815,17 +747,7 @@ jobs:
             echo "CONFIG_IPV6_ECN=y" >> "$CONFIG_FILE"
             echo "CONFIG_IP_NF_TARGET_ECN=y" >> "$CONFIG_FILE"
           fi
-
-          # ZRAM configuration*
-          if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
-            echo "CONFIG_CRYPTO_LZ4HC=y" >> "$CONFIG_FILE"
-            echo "CONFIG_CRYPTO_LZ4K=y" >> "$CONFIG_FILE"
-            echo "CONFIG_CRYPTO_LZ4KD=y" >> "$CONFIG_FILE"
-            echo "CONFIG_CRYPTO_842=y" >> "$CONFIG_FILE"
-            echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> "$CONFIG_FILE"
-            echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
-          fi
-
+          
           # LSM configuration*
           if [ "${{ github.event.inputs.LSM }}" = "true" ]; then
             echo "CONFIG_BBG=y" >> "$CONFIG_FILE"
@@ -1122,71 +1044,6 @@ jobs:
         with:
           name: AnyKernel3_SukiSUUltra_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.TKERNEL_VERSION }})${{ steps.suffix.outputs.value }}
           path: ./AnyKernel3/*
-
-      - name: Download and Unzip ZRAM
-        if: ${{ github.event.inputs.ZRAM == 'true' }}
-        id: zram_find
-        run: |
-          set -e
-          sudo apt install -y unzip
-          echo "Attempting to get ZRAM module zip download link..."
-          retries=3
-          success=0
-          for i in $(seq 1 $retries); do
-            echo "Attempt $i to download..."
-            download_url=$(curl -s https://api.github.com/repos/FurLC/ZRAM-Module/releases/latest | \
-              grep "browser_download_url" | grep "ZRAM-Module-.*\.zip" | cut -d '"' -f 4 | head -n 1)
-
-            if [ -n "$download_url" ]; then
-              echo "✅ Successfully obtained download link: $download_url"
-              wget -N "$download_url" && success=1 && break
-            else
-              echo "⚠️ Failed to get download link, waiting 3 seconds before retry..."
-              sleep 3
-            fi
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "❌ Still unable to get ZRAM module download link after $retries attempts"
-            echo "upload=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          unzip "$(ls -t ZRAM-Module-*.zip | head -1)" -d ZRAM-Module
-          target="./ZRAM-Module/zram/zram.ko"
-          echo "Searching for zram.ko module file..."
-          search_paths=(
-            "./kernel_workspace/kernel_platform/out"
-            "./kernel_workspace/device/qcom"
-          )
-          zram_path=""
-          for path in "${search_paths[@]}"; do
-            zram_path=$(find "$path" -type f -name "zram.ko" | head -n 1)
-            [ -n "$zram_path" ] && break
-          done
-          if [ -z "$zram_path" ]; then
-            zram_path=$(find "./kernel_workspace" -type f -name "zram.ko" | head -n 1)
-          fi
-          if [ -n "$zram_path" ] && [ -f "$zram_path" ]; then
-            echo "ZRAM module file finally located at: $zram_path"
-            mkdir -p "$(dirname "$target")"
-            if [ "$(realpath "$zram_path")" != "$(realpath "$target")" ]; then
-              cp "$zram_path" "$target"
-            else
-              echo "Source file and target path are the same, skipping copy"
-            fi
-          else
-            echo "zram.ko file not found, may be unsupported kernel version or build failed"
-            echo "upload=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-      - name: Upload ZRAM Module
-        if: ${{ github.event.inputs.ZRAM == 'true' && steps.zram_find.outputs.upload != 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZRAM-Module_${{ env.KERNEL_VERSION }}_${{ steps.extract_info.outputs.value }}
-          path: ZRAM-Module/*
-
+      
       - name: Post-build Disk Check
         run: df -h
