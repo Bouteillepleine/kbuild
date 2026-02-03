@@ -541,8 +541,8 @@ jobs:
           [[ -n "$CUSTOM_TAG" ]] && echo "Custom version identifier: $CUSTOM_TAG" || echo "Custom version identifier: Not enabled"
           [[ -n "$MANUAL_HASH" ]] && echo "Manual hash specified: $MANUAL_HASH" || echo "Manual hash specified: Not enabled"
 
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
-          # curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
+          # curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
           cd ./KernelSU
 
           # If manual hash is specified, switch to that commit
