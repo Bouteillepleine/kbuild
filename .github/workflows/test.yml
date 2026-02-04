@@ -368,7 +368,7 @@ jobs:
           echo "Initializing repo with $MANIFEST_REPO, branch $MANIFEST_BRANCH..."
           # repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
           # repo sync -c -j$(nproc) --no-clone-bundle --no-tags --force-sync
-          repo init -u https://github.com/Bouteillenepleine/oneplus_kernel_manifest.git -b main -m oneplus_15.xml --depth=1 --no-clone-bundle --no-tags
+          repo init -u https://github.com/Bouteillepleine/oneplus_kernel_manifest.git -b main -m oneplus_15.xml --depth=1 --no-clone-bundle --no-tags
 
           for dir in kernel_platform/common kernel_platform/msm-kernel; do
             if [ -e "$dir/BUILD.bazel" ]; then
