@@ -51,7 +51,7 @@ on:
         type: string
         description: "Custom build time (enter F to use current UTC time)"
         required: false
-        default: "Thu Dec 11 04:17:27 UTC 2025"
+        default: "Fri Feb 06 03:03:03 UTC 2026"
       KSU_META:
         type: string
         description: "Branch name (required) / custom version tag (leave empty to keep) / rollback branch commit hash (leave empty to keep)"
@@ -61,7 +61,7 @@ on:
         type: string
         description: "Custom kernel suffix (leave empty to use random string)"
         required: false
-        default: ""
+        default: "5-ga5f232d1ead0-ab14083253-4k"
       SUBLEVEL:
         description: "Custom kernel sublevel spoof (SUBLEVEL)"
         required: false
