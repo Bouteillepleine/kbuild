@@ -6,7 +6,7 @@ on:
         type: choice
         description: "配置文件"
         required: true
-        default: oneplus_15
+        default: oneplus_ace2_pro_b
         options:
           - oneplus_10r_v
           - oneplus_nord_3_v
@@ -93,7 +93,7 @@ on:
         type: string
         description: "自定义构建时间(输入F使用当前UTC时间)"
         required: false
-        default: "Thu Dec 11 04:17:27 UTC 2025"
+        default: "Wed Feb 04 04:04:04 UTC 2026"
       KSU_META:
         type: string
         description: "分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改)"
@@ -584,8 +584,8 @@ jobs:
           [[ -n "$CUSTOM_TAG" ]] && echo "自定义版本标识: $CUSTOM_TAG" || echo "自定义版本标识: 未启用"
           [[ -n "$MANUAL_HASH" ]] && echo "手动指定 hash: $MANUAL_HASH" || echo "手动指定 hash: 未启用"
 
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
-          # curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
+          # curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
+          curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
           cd ./KernelSU
 
           # 如果指定了手动 hash，就切换到该提交
