@@ -806,7 +806,7 @@ jobs:
           fi
           if [ "${{ github.event.inputs.KPM }}" = "KPN" ]; then
             echo "CONFIG_KPM=n" >> "$CONFIG_FILE"
-          fi`
+          fi
 
           # SUSFS config
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
