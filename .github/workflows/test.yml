@@ -33,7 +33,7 @@ on:
         type: string
         description: "Dynamic manifest repository owner"
         required: true
-        default: "⚡Ultra⚡"
+        default: "Bouteillepleine"
       BUILD_TIME:
         type: string
         description: "Custom build time (enter F to use current UTC time)"
