@@ -171,7 +171,6 @@ jobs:
           echo "FILE_CONF=$FILE_CONF" >> $GITHUB_ENV
           echo "FILE_BASE=$FILE_BASE" >> $GITHUB_ENV
 
-          # Dynamically call source manifest repository, repository priority: 1️⃣ OnePlusOSS → 2️⃣ ⚡Ultra⚡ (changeable)
           DYNAMIC_REPO_INPUT="${{ github.event.inputs.DYNAMIC_REPO }}"
           declare -A REPOS
           REPOS["OnePlusOSS"]="https://api.github.com/repos/OnePlusOSS/kernel_manifest"
@@ -364,7 +363,6 @@ jobs:
 
           BASE_URL="https://github.com/${MANIFEST_REPO}/kernel_manifest.git"
 
-          # NOTE: you hardcode repo init here (kept as-is from your snippet)
           repo init -u https://github.com/Bouteillepleine/oneplus_kernel_manifest.git -b main -m oneplus_15.xml --depth=1 --no-clone-bundle --no-tags
           repo sync -c -j"$(nproc)" --no-clone-bundle --no-tags --force-sync
 
@@ -580,7 +578,7 @@ jobs:
           cd kernel_workspace
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
             cd susfs4ksu
             [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "SUSFS_META is empty, using latest upstream SUSFS"
             cd ..
@@ -771,7 +769,7 @@ jobs:
             fi
           done
 
-      - name: Build Kernel FAST
+      - name: Build Kernel FAST (LLVM) + fix objcopy perms
         if: ${{ github.event.inputs.FAST_BUILD == 'true' }}
         id: fast_build
         shell: bash
@@ -832,6 +830,10 @@ jobs:
 
           make -j"$(nproc --all)" O=out $MAKE_ARGS gki_defconfig
 
+          # ---- FIX: objcopy fails because files in out/ become read-only (0444)
+          chmod -R u+w out || true
+          mkdir -p out/arch/arm64/kernel/pi
+
           echo "::group::Repro ciblée idreg-override (V=1, -j1)"
           make -j1 V=1 O=out $MAKE_ARGS arch/arm64/kernel/pi/idreg-override.pi.o || true
           echo "::endgroup::"
@@ -884,7 +886,7 @@ jobs:
           rm -f Image
           mv oImage Image
           cp Image "${GITHUB_WORKSPACE}/AnyKernel3/Image"
-     
+
       - name: Set zip Suffix
         id: suffix
         run: |
