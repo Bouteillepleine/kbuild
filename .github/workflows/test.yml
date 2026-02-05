@@ -598,26 +598,8 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$CONFIG_FILE"
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n" >> "$CONFIG_FILE"
           echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$CONFIG_FILE"
-          echo "CONFIG_OPTIMIZE_INLINING=y" >> "$CONFIG_FILE"
-          echo "CONFIG_FRAME_WARN=0" >> "$CONFIG_FILE"
-          
-          # ========================================
-          # 🚀 LTO THIN CONFIGURATION
-          # ========================================
-          echo "🔧 Enabling LTO Thin for performance boost..."
-          echo "CONFIG_LTO_CLANG=y" >> "$CONFIG_FILE"
-          echo "CONFIG_LTO_CLANG_THIN=y" >> "$CONFIG_FILE"
-          echo "CONFIG_LTO_CLANG_FULL=n" >> "$CONFIG_FILE"
-          echo "CONFIG_THINLTO=y" >> "$CONFIG_FILE"
-          echo "CONFIG_ARCH_SUPPORTS_LTO_CLANG=y" >> "$CONFIG_FILE"
-          echo "CONFIG_ARCH_SUPPORTS_LTO_CLANG_THIN=y" >> "$CONFIG_FILE"
-          echo "CONFIG_HAS_LTO_CLANG=y" >> "$CONFIG_FILE"
-          
-          # Désactiver les fonctionnalités incompatibles avec LTO
-          echo "CONFIG_FUNCTION_TRACER=n" >> "$CONFIG_FILE"
-          echo "CONFIG_STACK_TRACER=n" >> "$CONFIG_FILE"
-          echo "CONFIG_DYNAMIC_FTRACE=n" >> "$CONFIG_FILE"
-          
+          echo "CONFIG_OPTIMIZE_INLINING=y" >> "$CONFIG_FILE"               
+                   
           # ========================================
           # 🐛 DEBUG DISABLING (for smaller binary)
           # ========================================
