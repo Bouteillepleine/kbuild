@@ -972,66 +972,71 @@ jobs:
           # Read CLANG_PREBUILT_BIN from build.config.common
           CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common | cut -d'=' -f2 || true)
           if [[ -z "$CLANG_PREBUILT_BIN" ]]; then
-            echo "⚠️ CLANG_PREBUILT_BIN not found in build.config.common, falling back to official build script"
+            echo "⚠️ CLANG_PREBUILT_BIN not found, fallback"
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Try to extract clang-r version from CLANG_PREBUILT_BIN first
+          # Extract CLANG_VERSION
           if [[ "$CLANG_PREBUILT_BIN" =~ (clang-r[0-9a-z]+) ]]; then
             CLANG_VERSION="${BASH_REMATCH[1]}"
           else
-            # If not matched, try to extract from build.config.constants
-            if [[ -f ./common/build.config.constants ]]; then
-              CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
-            else
-              CLANG_VERSION=""
-            fi
+            CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 2>/dev/null || true)
           fi
 
           if [[ -z "${CLANG_VERSION:-}" ]]; then
-            echo "⚠️ Unable to get Clang version, falling back to official build script"
+            echo "⚠️ Unable to get CLANG_VERSION, fallback"
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Replace ${CLANG_VERSION} if present
+          # Expand ${CLANG_VERSION} placeholder if present
           CLANG_PREBUILT_BIN=${CLANG_PREBUILT_BIN/\$\{CLANG_VERSION\}/$CLANG_VERSION}
 
           echo "✅ CLANG_VERSION=$CLANG_VERSION"
           echo "✅ CLANG_PREBUILT_BIN=$CLANG_PREBUILT_BIN"
 
-          # Put Android clang prebuilt first
+          # Toolchain PATH
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN:$PATH"
-
-          # ccache (optional)
           export PATH="/usr/lib/ccache:$PATH"
           export CC="ccache clang"
 
-          # Quick tool sanity checks (fail fast, fail loud)
-          echo "::group::Toolchain sanity checks"
+          echo "::group::Toolchain sanity check (must exist)"
           command -v clang
-          clang --version | head -n 2 || true
           command -v ld.lld
-          command -v llvm-ar
-          command -v llvm-nm
           command -v llvm-objcopy
           command -v llvm-strip
+          command -v llvm-ar
+          command -v llvm-nm
+          command -v llvm-objdump
+          command -v llvm-readelf
           echo "::endgroup::"
 
           cd ./common
 
-          # "Tout LLVM" : no CROSS_COMPILE, force llvm-* binutils, force LLVM_IAS
+          # All-LLVM (no CROSS_COMPILE)
           MAKE_ARGS="LLVM=1 LLVM_IAS=1 ARCH=arm64 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             LD=ld.lld HOSTLD=ld.lld \
             AR=llvm-ar NM=llvm-nm OBJDUMP=llvm-objdump \
             OBJCOPY=llvm-objcopy STRIP=llvm-strip READELF=llvm-readelf \
-            KCFLAGS+=-Wno-error \
             RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
-            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole"
+            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
+            KCFLAGS+=-Wno-error"
 
+          # Defconfig first
           make -j"$(nproc --all)" O=out $MAKE_ARGS gki_defconfig
+
+          # Targeted verbose repro (prints exact objcopy command + paths)
+          echo "::group::Repro ciblée idreg-override (V=1, -j1)"
+          make -j1 V=1 O=out $MAKE_ARGS arch/arm64/kernel/pi/idreg-override.pi.o || true
+          echo "::endgroup::"
+
+          echo "::group::State of out/arch/arm64/kernel/pi"
+          ls -la out/arch/arm64/kernel/pi || true
+          echo "::endgroup::"
+
+          # Full build
           make -j"$(nproc --all)" O=out $MAKE_ARGS
 
           ccache -s || true
