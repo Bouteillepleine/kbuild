@@ -746,7 +746,7 @@ jobs:
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh || exit 1
           else
-            tools/bazel build --config=fast --lto=thin //common:kernel_aarch64_dist || exit 1
+            tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist || exit 1
           fi
 
       - name: Make AnyKernel3
