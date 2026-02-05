@@ -1,4 +1,4 @@
-name: Build Oneplus 15 Kernels
+name: Build Oneplus
 
 on:
   workflow_dispatch:
