@@ -312,9 +312,12 @@ jobs:
           git config --global user.email "⚡Ultra⚡@qq.com"
 
       - name: Install Dependencies + APTC
-        uses: awalsh128/cache-apt-pkgs-action@latest 
-        with: 
-          packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix libdw-dev
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: >
+            python3 git curl ccache libelf-dev build-essential flex bison libssl-dev
+            libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix libdw-dev
+            llvm lld
           execute_install_scripts: true
 
       - name: Restore Ccache
@@ -957,24 +960,20 @@ jobs:
       - name: Build Kernel FAST
         if: ${{ github.event.inputs.FAST_BUILD == 'true' }}
         id: fast_build
+        shell: bash
         run: |
-          sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' kernel_workspace/kernel_platform/common/BUILD.bazel
-          KERNEL_VERSION="${{ env.KERNEL_VERSION }}"
-          cd kernel_workspace/kernel_platform
+          set -euo pipefail
 
-          # Auto-detect LLVM_IAS
-          if [[ -f ./common/build.config.arm ]] && grep -q '^LLVM_IAS=1' ./common/build.config.arm; then
-            USE_LLVM_IAS=true
-          else
-            USE_LLVM_IAS=false
-          fi
+          sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' \
+            kernel_workspace/kernel_platform/common/BUILD.bazel
+
+          cd kernel_workspace/kernel_platform
 
           # Read CLANG_PREBUILT_BIN from build.config.common
           CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' ./common/build.config.common | cut -d'=' -f2 || true)
           if [[ -z "$CLANG_PREBUILT_BIN" ]]; then
             echo "⚠️ CLANG_PREBUILT_BIN not found in build.config.common, falling back to official build script"
             echo "fallback=true" >> "$GITHUB_OUTPUT"
-            echo "Please consider disabling FAST_BUILD and submitting an issue"
             exit 0
           fi
 
@@ -985,46 +984,57 @@ jobs:
             # If not matched, try to extract from build.config.constants
             if [[ -f ./common/build.config.constants ]]; then
               CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
+            else
+              CLANG_VERSION=""
             fi
           fi
 
-          if [[ -z "$CLANG_VERSION" ]]; then
-            echo "⚠️ Unable to get Clang version from CLANG_PREBUILT_BIN or build.config.constants, falling back to official build script"
+          if [[ -z "${CLANG_VERSION:-}" ]]; then
+            echo "⚠️ Unable to get Clang version, falling back to official build script"
             echo "fallback=true" >> "$GITHUB_OUTPUT"
-            echo "Please consider disabling FAST_BUILD and submitting an issue"
             exit 0
           fi
 
-          # Replace with new CLANG_VERSION value
+          # Replace ${CLANG_VERSION} if present
           CLANG_PREBUILT_BIN=${CLANG_PREBUILT_BIN/\$\{CLANG_VERSION\}/$CLANG_VERSION}
-          # Get first directory name of CLANG_PREBUILT_BIN, assign to CLANG_DIR
-          CLANG_DIR=$(echo "$CLANG_PREBUILT_BIN" | cut -d'/' -f1)
-          # Get parent directory name of CLANG_PREBUILT_BIN, assign to CLANG_PATH
-          CLANG_PATH=$(basename "$(dirname "$CLANG_PREBUILT_BIN")")
 
           echo "✅ CLANG_VERSION=$CLANG_VERSION"
-          echo "✅ CLANG_DIR=$CLANG_DIR"
-          echo "✅ CLANG_PATH=$CLANG_PATH"
-          echo "✅ USE_LLVM_IAS=$USE_LLVM_IAS"
+          echo "✅ CLANG_PREBUILT_BIN=$CLANG_PREBUILT_BIN"
 
+          # Put Android clang prebuilt first
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN:$PATH"
+
+          # ccache (optional)
           export PATH="/usr/lib/ccache:$PATH"
           export CC="ccache clang"
-          sudo apt install -y libelf-dev ccache
+
+          # Quick tool sanity checks (fail fast, fail loud)
+          echo "::group::Toolchain sanity checks"
+          command -v clang
+          clang --version | head -n 2 || true
+          command -v ld.lld
+          command -v llvm-ar
+          command -v llvm-nm
+          command -v llvm-objcopy
+          command -v llvm-strip
+          echo "::endgroup::"
 
           cd ./common
-          MAKE_ARGS="LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+
+          # "Tout LLVM" : no CROSS_COMPILE, force llvm-* binutils, force LLVM_IAS
+          MAKE_ARGS="LLVM=1 LLVM_IAS=1 ARCH=arm64 \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LD=ld.lld HOSTLD=ld.lld \
+            AR=llvm-ar NM=llvm-nm OBJDUMP=llvm-objdump \
+            OBJCOPY=llvm-objcopy STRIP=llvm-strip READELF=llvm-readelf \
+            KCFLAGS+=-Wno-error \
             RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc \
-            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole \
-            LD=ld.lld HOSTLD=ld.lld KCFLAGS+=-Wno-error"
+            PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole"
 
-          if [[ "$USE_LLVM_IAS" == "true" ]]; then
-            MAKE_ARGS="LLVM_IAS=1 $MAKE_ARGS"
-          fi
+          make -j"$(nproc --all)" O=out $MAKE_ARGS gki_defconfig
+          make -j"$(nproc --all)" O=out $MAKE_ARGS
 
-          make -j$(nproc --all) O=out $MAKE_ARGS gki_defconfig
-          make -j$(nproc --all) O=out $MAKE_ARGS
-          ccache -s
+          ccache -s || true
 
       - name: Fallback to Build Kernel
         if: ${{ github.event.inputs.FAST_BUILD == 'false' || steps.fast_build.outputs.fallback == 'true' }}
