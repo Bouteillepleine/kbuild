@@ -38,12 +38,12 @@ on:
         type: string
         description: "Custom build time (enter F to use current UTC time)"
         required: false
-        default: "Sun Feb 01 03:49:27 UTC 2026"
+        default: "Tue Feb 10 10:10:10 UTC 2026"
       KSU_META:
         type: string
         description: "Branch name (required) / custom version tag (optional) / rollback commit hash (optional)"
         required: false
-        default: "main/⚡Ultra⚡/"
+        default: "builtin/⚡Ultra⚡/"
       SUFFIX:
         type: string
         description: "Custom kernel suffix (leave empty to use random string)"
