@@ -379,73 +379,103 @@ jobs:
       
           # Doit contenir au moins 2 '/' => 3 champs (branche / tag / hash)
           if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 2 ]]; then
-            echo "Error: KSU_META parameter missing required '/' separator (format: branch/tag/hash)"
+            echo "❌ Error: KSU_META parameter missing required '/' separator (format: branch/tag/hash)"
+            echo "📋 Example: main/⚡Ultra⚡/"
             exit 10
           fi
       
           IFS='/' read -r BRANCH_NAME CUSTOM_TAG MANUAL_HASH <<< "$KSU_META"
-      
-          echo "Branch name: $BRANCH_NAME"
-          [[ -n "$CUSTOM_TAG" ]] && echo "Custom version tag: $CUSTOM_TAG" || echo "Custom version tag: Not enabled"
-          [[ -n "$MANUAL_HASH" ]] && echo "Manual hash: $MANUAL_HASH" || echo "Manual hash: Not enabled"
-          echo "Manager Source: ${{ github.event.inputs.MANAGER_SOURCE }}"
-      
-          # Sécurité : si BRANCH_NAME est vide, fallback sur main
           TARGET_BRANCH="${BRANCH_NAME:-main}"
       
+          echo "📋 KernelSU Configuration:"
+          echo "  - Branch name: $TARGET_BRANCH"
+          [[ -n "$CUSTOM_TAG" ]] && echo "  - Custom version tag: $CUSTOM_TAG" || echo "  - Custom version tag: Not enabled"
+          [[ -n "$MANUAL_HASH" ]] && echo "  - Manual hash: $MANUAL_HASH" || echo "  - Manual hash: Not enabled"
+          echo "  - Manager Source: ${{ github.event.inputs.MANAGER_SOURCE }}"
+      
+          # Repo sélectionné
           if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSU" ]; then
+            REPO_OWNER="SukiSU-Ultra"
+            REPO_NAME="SukiSU-Ultra"
             echo "📥 Installing SukiSU Ultra..."
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
           else
+            REPO_OWNER="ReSukiSU"
+            REPO_NAME="ReSukiSU"
             echo "📥 Installing ReSukiSU..."
-            # ✅ FIX CRITIQUE : ne pas passer 'builtin' (ref git inexistante), mais une vraie branche
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
           fi
+      
+          # (Optionnel) vérifier que la branche existe
+          echo "🔍 Verifying branch '$TARGET_BRANCH' exists in $REPO_OWNER/$REPO_NAME..."
+          if ! git ls-remote --heads "https://github.com/$REPO_OWNER/$REPO_NAME.git" | grep -q "refs/heads/$TARGET_BRANCH"; then
+            echo "⚠️ Warning: Branch '$TARGET_BRANCH' not found in $REPO_OWNER/$REPO_NAME"
+            echo "📋 Available branches (first 10):"
+            git ls-remote --heads "https://github.com/$REPO_OWNER/$REPO_NAME.git" | awk '{print $2}' | sed 's|refs/heads/||' | head -10
+            echo "⚠️ Proceeding anyway..."
+          fi
+      
+          # Installation (le setup.sh clone KernelSU et checkout la branche passée)
+          curl -LSs "https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
       
           cd ./KernelSU
       
+          # Petit debug utile (ne casse pas le step)
+          echo "🔎 KernelSU tree check:"
+          ls -la || true
+          test -f kernel/Kbuild && echo "✅ kernel/Kbuild found" || echo "⚠️ kernel/Kbuild missing"
+      
+          # Gestion du hash manuel
           if [[ -n "$MANUAL_HASH" ]]; then
+            echo "🔄 Checking out manual hash: $MANUAL_HASH"
             git fetch origin "$TARGET_BRANCH" --depth=50
             git checkout "$MANUAL_HASH"
             SHORT_HASH="${MANUAL_HASH:0:8}"
+            echo "✅ Checked out to commit: $SHORT_HASH"
           fi
       
-          if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSU" ]; then
-            KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$TARGET_BRANCH/kernel/Kbuild" | \
-              grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
-          else
-            KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$TARGET_BRANCH/kernel/Kbuild" | \
-              grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
-          fi
+          # ✅ Récupération KSU_API_VERSION en LOCAL (fiable, pas de réseau)
+          echo "📦 Reading KSU_API_VERSION from local kernel/Kbuild..."
+          KSU_API_VERSION="$(grep -m1 'KSU_VERSION_API :=' kernel/Kbuild 2>/dev/null \
+            | awk -F':=' '{print $2}' \
+            | tr -d '[:space:]' || true)"
       
-          # ✅ FIX : 4.1.O -> 4.1.0
-          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "4.1.0" | sort -V | head -n1)" != "4.1.0" ]]; then
+          # Fallback + garde-fou version minimale
+          if [[ -z "$KSU_API_VERSION" ]]; then
+            echo "⚠️ KSU_API_VERSION not found locally, using fallback: 4.1.0"
+            KSU_API_VERSION="4.1.0"
+          elif [[ "$(printf '%s\n' "$KSU_API_VERSION" "4.1.0" | sort -V | head -n1)" != "4.1.0" ]]; then
+            echo "⚠️ KSU_API_VERSION ($KSU_API_VERSION) < 4.1.0, using fallback: 4.1.0"
             KSU_API_VERSION="4.1.0"
           fi
           echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
+          echo "✅ KSU_API_VERSION: $KSU_API_VERSION"
       
+          # Hashs git
           GIT_HASH="$(git rev-parse --short HEAD)"
           KSU_COMMIT_SHA="$(git rev-parse HEAD)"
           echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> "$GITHUB_ENV"
-          echo "GIT_HASH=$GIT_HASH"
+          echo "✅ GIT_HASH: $GIT_HASH"
+          echo "✅ KSU_COMMIT_SHA: $KSU_COMMIT_SHA"
       
-          if [[ -n "$MANUAL_HASH" ]]; then
-            USE_HASH="$SHORT_HASH"
-          else
-            USE_HASH="$GIT_HASH"
+          # Hash utilisé pour la version
+          USE_HASH="$GIT_HASH"
+          if [[ -n "${MANUAL_HASH:-}" ]]; then
+            USE_HASH="${SHORT_HASH:-$GIT_HASH}"
           fi
       
+          # Version complète
           if [[ -z "$CUSTOM_TAG" ]]; then
             VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$TARGET_BRANCH"
           else
             VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$TARGET_BRANCH[$USE_HASH]"
           fi
+          echo "✅ VERSION_FULL: $VERSION_FULL"
       
-          # Nettoyage des définitions existantes
+          # Nettoyage anciennes defs
           sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild
           sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild
           sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild
       
+          # Injection defs (sans indentation pour éviter des espaces parasites)
           VERSION_DEFINITIONS=$(cat <<EOF
             define get_ksu_version_full
             $VERSION_FULL
@@ -456,21 +486,23 @@ jobs:
           EOF
           )
       
-          # Ré-injection après REPO_OWNER := (ou à la fin si non trouvé)
           awk -v def="$VERSION_DEFINITIONS" '
             /REPO_OWNER :=/ {print; print def; inserted=1; next}
             1
             END {if (!inserted) print def}
           ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
       
-          # Version “numérique” KSU
-          KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 37185)
+          # KSUVER (compte sur la branche cible, pas "main" en dur)
+          KSU_VERSION="$(expr $(git rev-list --count "$TARGET_BRANCH" 2>/dev/null || echo 13000) + 37185)"
           echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
+          echo "✅ KSUVER: $KSU_VERSION"
       
-          echo "::group::Final Kbuild version info"
+          echo "::group::📄 Final Kbuild version info"
           grep -A10 "REPO_OWNER" kernel/Kbuild || true
           grep "KSU_VERSION_FULL" kernel/Kbuild || true
           echo "::endgroup::"
+      
+          echo "✅ KernelSU step completed successfully!"
 
       - name: Apply Patches SukiSU Ultra
         run: |
@@ -511,8 +543,7 @@ jobs:
             patch -p1 < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
             echo "SUSFS patch applied"
           fi
-
-      # ✅ NOUVELLE ÉTAPE : Capture des métadonnées SUSFS
+      
       - name: 🔍 Capture SUSFS Metadata
         if: ${{ github.event.inputs.SUSFS_META != '-1' }}
         run: |
