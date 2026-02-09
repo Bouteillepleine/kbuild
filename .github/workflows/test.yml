@@ -805,7 +805,7 @@ jobs:
           echo "IMAGE_SHA256=${IMAGE_SHA256}" >> $GITHUB_ENV
           echo "IMAGE_SIZE=${IMAGE_SIZE}" >> $GITHUB_ENV
 
-      - name: 📊 Build Summary
+      - name: "📊 Build Summary"
         shell: bash
         run: |
           set -euo pipefail
