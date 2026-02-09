@@ -370,94 +370,106 @@ jobs:
           git commit -m "Random suffix & remove -dirty"
 
       - name: Add KernelSU (SukiSU or ReSuki)
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace
-
+      
           KSU_META="${{ github.event.inputs.KSU_META }}"
-
+      
+          # Doit contenir au moins 2 '/' => 3 champs (branche / tag / hash)
           if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 2 ]]; then
-            echo "Error: KSU_META parameter missing required '/' separator"
+            echo "Error: KSU_META parameter missing required '/' separator (format: branch/tag/hash)"
             exit 10
           fi
-
+      
           IFS='/' read -r BRANCH_NAME CUSTOM_TAG MANUAL_HASH <<< "$KSU_META"
-
+      
           echo "Branch name: $BRANCH_NAME"
           [[ -n "$CUSTOM_TAG" ]] && echo "Custom version tag: $CUSTOM_TAG" || echo "Custom version tag: Not enabled"
           [[ -n "$MANUAL_HASH" ]] && echo "Manual hash: $MANUAL_HASH" || echo "Manual hash: Not enabled"
           echo "Manager Source: ${{ github.event.inputs.MANAGER_SOURCE }}"
-
-          if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSu" ]; then
+      
+          # Sécurité : si BRANCH_NAME est vide, fallback sur main
+          TARGET_BRANCH="${BRANCH_NAME:-main}"
+      
+          if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSU" ]; then
             echo "📥 Installing SukiSU Ultra..."
-            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$BRANCH_NAME"
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
           else
             echo "📥 Installing ReSukiSU..."
-            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s builtin
+            # ✅ FIX CRITIQUE : ne pas passer 'builtin' (ref git inexistante), mais une vraie branche
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
           fi
-
+      
           cd ./KernelSU
-
+      
           if [[ -n "$MANUAL_HASH" ]]; then
-            git fetch origin "$BRANCH_NAME" --depth=50
+            git fetch origin "$TARGET_BRANCH" --depth=50
             git checkout "$MANUAL_HASH"
-            SHORT_HASH=${MANUAL_HASH:0:8}
+            SHORT_HASH="${MANUAL_HASH:0:8}"
           fi
-
-          if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSu" ]; then
-            KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$BRANCH_NAME/kernel/Kbuild" | \
+      
+          if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSU" ]; then
+            KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/$TARGET_BRANCH/kernel/Kbuild" | \
               grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
           else
-            KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$BRANCH_NAME/kernel/Kbuild" | \
+            KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$TARGET_BRANCH/kernel/Kbuild" | \
               grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
           fi
-          
-          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "4.1.O" | sort -V | head -n1)" != "4.1.0" ]]; then
+      
+          # ✅ FIX : 4.1.O -> 4.1.0
+          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "4.1.0" | sort -V | head -n1)" != "4.1.0" ]]; then
             KSU_API_VERSION="4.1.0"
           fi
-          echo "KSU_API_VERSION=$KSU_API_VERSION" >> $GITHUB_ENV
-
-          GIT_HASH=$(git rev-parse --short HEAD)
-          KSU_COMMIT_SHA=$(git rev-parse HEAD)
-          echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> $GITHUB_ENV
+          echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
+      
+          GIT_HASH="$(git rev-parse --short HEAD)"
+          KSU_COMMIT_SHA="$(git rev-parse HEAD)"
+          echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> "$GITHUB_ENV"
           echo "GIT_HASH=$GIT_HASH"
-
+      
           if [[ -n "$MANUAL_HASH" ]]; then
             USE_HASH="$SHORT_HASH"
           else
             USE_HASH="$GIT_HASH"
           fi
+      
           if [[ -z "$CUSTOM_TAG" ]]; then
-            VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$BRANCH_NAME"
+            VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$TARGET_BRANCH"
           else
-            VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$BRANCH_NAME[$USE_HASH]"
+            VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$TARGET_BRANCH[$USE_HASH]"
           fi
-
+      
+          # Nettoyage des définitions existantes
           sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild
           sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild
           sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild
-
+      
           VERSION_DEFINITIONS=$(cat <<EOF
             define get_ksu_version_full
             $VERSION_FULL
             endef
-
+      
             KSU_VERSION_API := $KSU_API_VERSION
             KSU_VERSION_FULL := $VERSION_FULL
-          EOF
-          )
-
+            EOF
+                )
+      
+          # Ré-injection après REPO_OWNER := (ou à la fin si non trouvé)
           awk -v def="$VERSION_DEFINITIONS" '
             /REPO_OWNER :=/ {print; print def; inserted=1; next}
             1
             END {if (!inserted) print def}
           ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
-
+      
+          # Version “numérique” KSU
           KSU_VERSION=$(expr $(git rev-list --count main 2>/dev/null || echo 13000) + 37185)
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
-
+          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
+      
           echo "::group::Final Kbuild version info"
-          grep -A10 "REPO_OWNER" kernel/Kbuild
-          grep "KSU_VERSION_FULL" kernel/Kbuild
+          grep -A10 "REPO_OWNER" kernel/Kbuild || true
+          grep "KSU_VERSION_FULL" kernel/Kbuild || true
           echo "::endgroup::"
 
       - name: Apply Patches SukiSU Ultra
