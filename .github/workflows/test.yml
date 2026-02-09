@@ -377,7 +377,6 @@ jobs:
       
           KSU_META="${{ github.event.inputs.KSU_META }}"
       
-          # Doit contenir au moins 2 '/' => 3 champs (branche / tag / hash)
           if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 2 ]]; then
             echo "❌ Error: KSU_META parameter missing required '/' separator (format: branch/tag/hash)"
             echo "📋 Example: main/⚡Ultra⚡/"
@@ -393,37 +392,21 @@ jobs:
           [[ -n "$MANUAL_HASH" ]] && echo "  - Manual hash: $MANUAL_HASH" || echo "  - Manual hash: Not enabled"
           echo "  - Manager Source: ${{ github.event.inputs.MANAGER_SOURCE }}"
       
-          # Repo sélectionné
+          # Sélection du script setup (✅ comme tu l’as demandé: curl raw -> bash)
           if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "SukiSU" ]; then
-            REPO_OWNER="SukiSU-Ultra"
-            REPO_NAME="SukiSU-Ultra"
             echo "📥 Installing SukiSU Ultra..."
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
           else
-            REPO_OWNER="ReSukiSU"
-            REPO_NAME="ReSukiSU"
             echo "📥 Installing ReSukiSU..."
+            curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
           fi
-      
-          # (Optionnel) vérifier que la branche existe
-          echo "🔍 Verifying branch '$TARGET_BRANCH' exists in $REPO_OWNER/$REPO_NAME..."
-          if ! git ls-remote --heads "https://github.com/$REPO_OWNER/$REPO_NAME.git" | grep -q "refs/heads/$TARGET_BRANCH"; then
-            echo "⚠️ Warning: Branch '$TARGET_BRANCH' not found in $REPO_OWNER/$REPO_NAME"
-            echo "📋 Available branches (first 10):"
-            git ls-remote --heads "https://github.com/$REPO_OWNER/$REPO_NAME.git" | awk '{print $2}' | sed 's|refs/heads/||' | head -10
-            echo "⚠️ Proceeding anyway..."
-          fi
-      
-          # Installation (le setup.sh clone KernelSU et checkout la branche passée)
-          curl -LSs "https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/main/kernel/setup.sh" | bash -s "$TARGET_BRANCH"
       
           cd ./KernelSU
       
-          # Petit debug utile (ne casse pas le step)
           echo "🔎 KernelSU tree check:"
           ls -la || true
           test -f kernel/Kbuild && echo "✅ kernel/Kbuild found" || echo "⚠️ kernel/Kbuild missing"
       
-          # Gestion du hash manuel
           if [[ -n "$MANUAL_HASH" ]]; then
             echo "🔄 Checking out manual hash: $MANUAL_HASH"
             git fetch origin "$TARGET_BRANCH" --depth=50
@@ -432,13 +415,11 @@ jobs:
             echo "✅ Checked out to commit: $SHORT_HASH"
           fi
       
-          # ✅ Récupération KSU_API_VERSION en LOCAL (fiable, pas de réseau)
           echo "📦 Reading KSU_API_VERSION from local kernel/Kbuild..."
           KSU_API_VERSION="$(grep -m1 'KSU_VERSION_API :=' kernel/Kbuild 2>/dev/null \
             | awk -F':=' '{print $2}' \
             | tr -d '[:space:]' || true)"
       
-          # Fallback + garde-fou version minimale
           if [[ -z "$KSU_API_VERSION" ]]; then
             echo "⚠️ KSU_API_VERSION not found locally, using fallback: 4.1.0"
             KSU_API_VERSION="4.1.0"
@@ -449,20 +430,17 @@ jobs:
           echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
           echo "✅ KSU_API_VERSION: $KSU_API_VERSION"
       
-          # Hashs git
           GIT_HASH="$(git rev-parse --short HEAD)"
           KSU_COMMIT_SHA="$(git rev-parse HEAD)"
           echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA" >> "$GITHUB_ENV"
           echo "✅ GIT_HASH: $GIT_HASH"
           echo "✅ KSU_COMMIT_SHA: $KSU_COMMIT_SHA"
       
-          # Hash utilisé pour la version
           USE_HASH="$GIT_HASH"
           if [[ -n "${MANUAL_HASH:-}" ]]; then
             USE_HASH="${SHORT_HASH:-$GIT_HASH}"
           fi
       
-          # Version complète
           if [[ -z "$CUSTOM_TAG" ]]; then
             VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$TARGET_BRANCH"
           else
@@ -470,12 +448,10 @@ jobs:
           fi
           echo "✅ VERSION_FULL: $VERSION_FULL"
       
-          # Nettoyage anciennes defs
           sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild
           sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild
           sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild
       
-          # Injection defs (sans indentation pour éviter des espaces parasites)
           VERSION_DEFINITIONS=$(cat <<EOF
             define get_ksu_version_full
             $VERSION_FULL
@@ -492,7 +468,6 @@ jobs:
             END {if (!inserted) print def}
           ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
       
-          # KSUVER (compte sur la branche cible, pas "main" en dur)
           KSU_VERSION="$(expr $(git rev-list --count "$TARGET_BRANCH" 2>/dev/null || echo 13000) + 37185)"
           echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
           echo "✅ KSUVER: $KSU_VERSION"
