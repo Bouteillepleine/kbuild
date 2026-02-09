@@ -450,11 +450,11 @@ jobs:
             define get_ksu_version_full
             $VERSION_FULL
             endef
-      
+
             KSU_VERSION_API := $KSU_API_VERSION
             KSU_VERSION_FULL := $VERSION_FULL
-            EOF
-                )
+          EOF
+          )
       
           # Ré-injection après REPO_OWNER := (ou à la fin si non trouvé)
           awk -v def="$VERSION_DEFINITIONS" '
