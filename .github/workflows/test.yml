@@ -807,13 +807,27 @@ jobs:
 
       - name: "📊 Build Summary"
         shell: bash
+        env:
+          INPUT_FILE: ${{ inputs.FILE }}
+          INPUT_MANAGER_SOURCE: ${{ inputs.MANAGER_SOURCE }}
+          INPUT_KPM: ${{ inputs.KPM }}
+          INPUT_SUSFS_META: ${{ inputs.SUSFS_META }}
+          INPUT_SUSFS_DEV: ${{ inputs.SUSFS_DEV }}
+          INPUT_BUILD_NOCCACHE: ${{ inputs.BUILD_NOCCACHE }}
+          INPUT_LSM: ${{ inputs.LSM }}
+          INPUT_NETFILTER: ${{ inputs.NETFILTER }}
+          INPUT_BBR_ECN: ${{ inputs.BBR_ECN }}
+          INPUT_UNICODE_BYPASS: ${{ inputs.UNICODE_BYPASS }}
+          ENV_KANDROID_VERSION: ${{ env.KANDROID_VERSION }}
+          ENV_KERNEL_VERSION: ${{ env.KERNEL_VERSION }}
         run: |
           set -euo pipefail
 
+          # Variables de base (avec fallbacks)
           KSU_COMMIT_SHA="${KSU_COMMIT_SHA:-N/A}"
           KSUVER="${KSUVER:-N/A}"
           TKERNEL_VERSION="${TKERNEL_VERSION:-N/A}"
-          KANDROID_VERSION="${KANDROID_VERSION:-N/A}"
+          KANDROID_VERSION="${KANDROID_VERSION:-${ENV_KANDROID_VERSION:-N/A}}"
           BUILD_TIME="${BUILD_TIME:-N/A}"
           WARNINGS_COUNT="${WARNINGS_COUNT:-N/A}"
           ZIP_NAME="${ZIP_NAME:-N/A}"
@@ -822,19 +836,23 @@ jobs:
           IMAGE_SHA256="${IMAGE_SHA256:-N/A}"
           IMAGE_SIZE="${IMAGE_SIZE:-N/A}"
 
-          if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
+          # --- SUSFS detection (basée sur l'input) ---
+          if [[ "${INPUT_SUSFS_META}" != "-1" ]]; then
             SUSFS_ENABLED="✅ Enabled"
             SUSFS_VERSION="${SUSVER:-Latest upstream}"
 
-            # ✅ FIX: pas d’imbrication bash ${VAR:-...${{ }}} ; logique simple et robuste
             SUSFS_BRANCH_NAME="${SUSFS_BRANCH_NAME:-}"
             if [[ -z "$SUSFS_BRANCH_NAME" ]]; then
-              SUSFS_BRANCH_NAME="gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}"
+              # Reconstruit la branche à partir des env + input SUSFS_DEV
+              SUFFIX_DEV=""
+              if [[ "${INPUT_SUSFS_DEV}" == "true" ]]; then
+                SUFFIX_DEV="-dev"
+              fi
+              SUSFS_BRANCH_NAME="gki-${ENV_KANDROID_VERSION:-N/A}-${ENV_KERNEL_VERSION:-N/A}${SUFFIX_DEV}"
             fi
 
             SUSFS_COMMIT_SHA="${SUSFS_COMMIT_SHA:-Latest}"
-
-            if [ "$SUSFS_COMMIT_SHA" != "Latest" ] && [ "$SUSFS_COMMIT_SHA" != "N/A" ]; then
+            if [[ "$SUSFS_COMMIT_SHA" != "Latest" && "$SUSFS_COMMIT_SHA" != "N/A" ]]; then
               SUSFS_COMMIT_LINK="[\`${SUSFS_COMMIT_SHA:0:8}\`](https://gitlab.com/simonpunk/susfs4ksu/-/commit/${SUSFS_COMMIT_SHA})"
             else
               SUSFS_COMMIT_LINK="Latest upstream"
@@ -843,27 +861,43 @@ jobs:
             SUSFS_ENABLED="❌ Disabled"
             SUSFS_VERSION="N/A"
             SUSFS_BRANCH_NAME="N/A"
-            SUSFS_COMMIT_SHA="N/A"
             SUSFS_COMMIT_LINK="N/A"
           fi
 
-          if [ "${{ github.event.inputs.MANAGER_SOURCE }}" = "ReSuki" ]; then
+          # --- Repo KernelSU pour le lien commit ---
+          if [[ "${INPUT_MANAGER_SOURCE}" == "ReSuki" ]]; then
             KSU_REPO="ReSukiSU/ReSukiSU"
           else
             KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
           fi
 
-          if [ "$KSU_COMMIT_SHA" != "N/A" ] && [ -n "$KSU_COMMIT_SHA" ]; then
+          if [[ "$KSU_COMMIT_SHA" != "N/A" && -n "$KSU_COMMIT_SHA" ]]; then
             KSU_COMMIT_LINK="[\`${KSU_COMMIT_SHA:0:8}\`](https://github.com/${KSU_REPO}/commit/${KSU_COMMIT_SHA})"
           else
             KSU_COMMIT_LINK="N/A"
           fi
 
-          KPM_STATUS="${{ github.event.inputs.KPM == 'KPM' && '✅ Enabled' || '❌ Disabled' }}"
-          LSM_STATUS="${{ github.event.inputs.LSM == 'true' && '✅ Enabled' || '❌ Disabled' }}"
-          BBR_ECN_STATUS="${{ github.event.inputs.BBR_ECN == 'true' && '✅ Enabled' || '❌ Disabled' }}"
-          NETFILTER_STATUS="${{ github.event.inputs.NETFILTER == 'true' && '✅ Enabled (IPSET & IPv6 NAT)' || '❌ Disabled' }}"
-          UNICODE_FIX_STATUS="${{ github.event.inputs.UNICODE_BYPASS == 'true' && '✅ Enabled' || '❌ Disabled' }}"
+          # --- Feature status (sans ternaires expressions) ---
+          KPM_STATUS="❌ Disabled"
+          [[ "${INPUT_KPM}" == "KPM" ]] && KPM_STATUS="✅ Enabled"
+
+          LSM_STATUS="❌ Disabled"
+          [[ "${INPUT_LSM}" == "true" ]] && LSM_STATUS="✅ Enabled"
+
+          BBR_ECN_STATUS="❌ Disabled"
+          [[ "${INPUT_BBR_ECN}" == "true" ]] && BBR_ECN_STATUS="✅ Enabled"
+
+          NETFILTER_STATUS="❌ Disabled"
+          [[ "${INPUT_NETFILTER}" == "true" ]] && NETFILTER_STATUS="✅ Enabled (IPSET & IPv6 NAT)"
+
+          UNICODE_FIX_STATUS="❌ Disabled"
+          [[ "${INPUT_UNICODE_BYPASS}" == "true" ]] && UNICODE_FIX_STATUS="✅ Enabled"
+
+          CCACHE_STATUS="✅ Enabled"
+          [[ "${INPUT_BUILD_NOCCACHE}" == "true" ]] && CCACHE_STATUS="❌ Disabled"
+
+          SUSFS_DEV_STATUS="❌ No"
+          [[ "${INPUT_SUSFS_DEV}" == "true" ]] && SUSFS_DEV_STATUS="✅ Yes"
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           # ✅ GKI Kernel Build Complete
@@ -875,19 +909,19 @@ jobs:
           | **Device** | OnePlus 15 |
           | **Android Version** | ${KANDROID_VERSION} |
           | **Kernel Version** | ${TKERNEL_VERSION} |
-          | **Configuration** | ${{ github.event.inputs.FILE }} |
+          | **Configuration** | ${INPUT_FILE} |
 
           ## 🔧 Build Configuration
 
           | Component | Version/Setting |
           |-----------|----------------|
-          | **Manager Source** | ${{ github.event.inputs.MANAGER_SOURCE }} |
+          | **Manager Source** | ${INPUT_MANAGER_SOURCE} |
           | **KSU Version** | v${KSUVER} |
           | **SUSFS** | ${SUSFS_ENABLED} |
           | **SUSFS Version** | ${SUSFS_VERSION} |
           | **SUSFS Branch** | ${SUSFS_BRANCH_NAME} |
-          | **SUSFS Dev Mode** | ${{ github.event.inputs.SUSFS_DEV == 'true' && '✅ Yes' || '❌ No' }} |
-          | **Ccache** | ${{ github.event.inputs.BUILD_NOCCACHE == 'true' && '❌ Disabled' || '✅ Enabled' }} |
+          | **SUSFS Dev Mode** | ${SUSFS_DEV_STATUS} |
+          | **Ccache** | ${CCACHE_STATUS} |
           | **Build Time** | ${BUILD_TIME} |
           | **Warnings** | ${WARNINGS_COUNT} |
 
@@ -911,19 +945,17 @@ jobs:
           ## ✨ Features Status
 
           **Core Features:**
-          - ✅ **KernelSU** (${{ github.event.inputs.MANAGER_SOURCE }})
+          - ✅ **KernelSU** (${INPUT_MANAGER_SOURCE})
           - ${KPM_STATUS} **KPM** (Kernel Patch Manager)
           - ${SUSFS_ENABLED} **SUSFS**
 
           **Network Optimizations:**
-          - ${BBR_ECN_STATUS} **BBR & ECN** (TCP Congestion Control)
+          - ${BBR_ECN_STATUS} **BBR & ECN**
           - ${NETFILTER_STATUS} **NETFILTER**
 
           **Security & Fixes:**
           - ${LSM_STATUS} **LSM** (Baseband Guard)
           - ${UNICODE_FIX_STATUS} **Unicode Bypass Fix**
-
-          ---
           EOF
 
       - name: 📊 Post-build Disk Check
