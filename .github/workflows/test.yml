@@ -55,7 +55,7 @@ on:
         type: string
         description: "Branch name (required)/Custom version identifier (leave empty to not modify)/Rollback branch commit hash version (leave empty to not modify)"
         required: false
-        default: "builtin/⚡Ultra⚡/"
+        default: "main/⚡Ultra⚡/"
       SUFFIX:
         type: string
         description: "Custom kernel suffix (random string used if not provided)"
