@@ -145,6 +145,29 @@ jobs:
           remove-haskell: "true"
           remove-codeql: "true"
 
+      - name: Relocate workspace to /mnt (big disk)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "::group::Disk before relocating workspace"
+          df -h
+          echo "::endgroup::"
+
+          sudo mkdir -p /mnt/work
+          sudo chown -R "$USER:$USER" /mnt/work
+
+          shopt -s dotglob
+          mv "$GITHUB_WORKSPACE"/* /mnt/work/ || true
+          shopt -u dotglob
+
+          rm -rf "$GITHUB_WORKSPACE"
+          ln -s /mnt/work "$GITHUB_WORKSPACE"
+
+          echo "::group::Disk after relocating workspace"
+          df -h
+          du -sh /mnt/work || true
+          echo "::endgroup::"
+
       - name: Create and Enable 8G Swap
         shell: bash
         run: |
@@ -164,7 +187,7 @@ jobs:
           set -euxo pipefail
 
           echo "::group::Disk before cleanup"
-          df -h /
+          df -h
           echo "::endgroup::"
 
           echo "::group::Remove large preinstalled SDKs/caches"
@@ -182,7 +205,7 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Disk after cleanup"
-          df -h /
+          df -h
           echo "::endgroup::"
 
       - name: Extract Manifest Info
@@ -362,32 +385,32 @@ jobs:
       - name: Check Disk Space
         run: df -h
 
-      - name: Set Cache Environment
+      - name: Set Cache Environment (ccache on /mnt)
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
+        shell: bash
         run: |
-          echo "CCACHE_DIR=$HOME/.ccache_${{ github.event.inputs.FILE }}" >> "$GITHUB_ENV"
-          mkdir -p "$HOME/.ccache_${{ github.event.inputs.FILE }}"
-          echo "set: $HOME/.ccache_${{ github.event.inputs.FILE }}"
+          set -euxo pipefail
+          echo "CCACHE_DIR=/mnt/ccache_${{ github.event.inputs.FILE }}" >> "$GITHUB_ENV"
+          mkdir -p "/mnt/ccache_${{ github.event.inputs.FILE }}"
+          echo "CCACHE_DIR=/mnt/ccache_${{ github.event.inputs.FILE }}"
 
       - name: Configure Git
         run: |
           git config --global user.name "OnePlus"
           git config --global user.email "OnePlus@qq.com"
 
-      - name: Install Dependencies + APTC
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: python3 git curl ccache libelf-dev build-essential flex bison libssl-dev libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix kmod libdw-dev elfutils jq zip
-          execute_install_scripts: true
-
-      - name: Free APT Cache Space
-        if: ${{ github.event.inputs.SPACE_NOCLEAN == 'false' }}
+      - name: Install Dependencies (no apt cache action)
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 git curl ccache libelf-dev build-essential flex bison libssl-dev \
+            libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix \
+            kmod libdw-dev elfutils jq zip
           sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/* || true
-          df -h /
+          sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* || true
+          df -h
 
       - name: Restore Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
@@ -420,6 +443,17 @@ jobs:
           curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
           chmod a+x ~/repo
           sudo mv ~/repo /usr/local/bin/repo
+
+      - name: Fail fast if disk too low (before repo sync)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h
+          AVAIL_GB=$(df -BG "$GITHUB_WORKSPACE" | awk 'NR==2{gsub("G","",$4); print $4}')
+          if [ "${AVAIL_GB:-0}" -lt 15 ]; then
+            echo "ERROR: Only ${AVAIL_GB}G free on workspace disk. Aborting to avoid runner crash."
+            exit 1
+          fi
 
       - name: Initialize Repo and Sync
         env:
@@ -480,13 +514,6 @@ jobs:
           fi
 
           NEW_VERSION=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)
-
-          if [ "$ORIG_VERSION" != "$NEW_VERSION" ]; then
-            echo "Kernel Version:$ORIG_VERSION->$NEW_VERSION"
-          else
-            echo "Kernel Version:$ORIG_VERSION No changes"
-          fi
-
           echo "TKERNEL_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
 
           if [ -n "$BRANCH" ]; then
@@ -823,13 +850,25 @@ jobs:
             fi
           done
 
-      - name: Modules (Kernel 6.12 only)        
+      - name: Modules (Kernel 6.12 only)
+        if: ${{ env.KERNEL_VERSION == '6.12' }}
         shell: bash
         run: |
           set -e
           echo "Disabling module name protection for kernel 6.12"
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' \
             kernel_workspace/kernel_platform/common/BUILD.bazel
+
+      - name: Fail fast if disk too low (before build)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          df -h
+          AVAIL_GB=$(df -BG "$GITHUB_WORKSPACE" | awk 'NR==2{gsub("G","",$4); print $4}')
+          if [ "${AVAIL_GB:-0}" -lt 10 ]; then
+            echo "ERROR: Only ${AVAIL_GB}G free on workspace disk. Aborting to avoid runner crash."
+            exit 1
+          fi
 
       - name: Build Kernel
         shell: bash
@@ -840,7 +879,7 @@ jobs:
           trap '
             echo "Cleaning intermediate files...";
             rm -rf kernel_platform/common/out/*/intermediates kernel_platform/out/*/intermediates 2>/dev/null || true;
-            df -h /
+            df -h
           ' EXIT
 
           echo "::group::Detect build entrypoints"
@@ -855,34 +894,28 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Disk before build"
-          df -h /
+          df -h
           echo "::endgroup::"
 
           echo "::group::Building Kernel"
-
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
-
           elif [ -x "tools/bazel" ]; then
             tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist
-
           else
             if [ -f "kernel_platform/build_with_bazel.py" ]; then
               cd kernel_platform
               ./build_with_bazel.py -t "${CPUD}" "${BUILD_METHOD}"
-
             elif [ -f "kernel_platform/oplus/build/oplus_build_kernel.sh" ]; then
               cd kernel_platform
               LTO=none SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
                 ./oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
-
             else
               if ! command -v bazel >/dev/null 2>&1; then
                 sudo curl -fsSL -o /usr/local/bin/bazel \
                   https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
                 sudo chmod +x /usr/local/bin/bazel
               fi
-
               if [ -d "common" ] && [ -f "common/BUILD.bazel" ]; then
                 bazel build --config=fast --lto=none //common:kernel_aarch64_dist
               else
@@ -891,12 +924,11 @@ jobs:
               fi
             fi
           fi
-
           echo "::endgroup::"
 
           echo "::group::Post-Build Cleanup"
           rm -rf kernel_platform/common/out/*/intermediates kernel_platform/out/*/intermediates 2>/dev/null || true
-          df -h /
+          df -h
           echo "::endgroup::"
 
       - name: Make AnyKernel3
@@ -1120,7 +1152,7 @@ jobs:
         shell: bash
         run: |
           echo "::group::Disk Usage Analysis"
-          df -h /
+          df -h
           echo ""
           du -sh kernel_workspace 2>/dev/null || echo "Build directory not found"
           echo ""
@@ -1154,13 +1186,13 @@ jobs:
             safe_remove "kernel_workspace/.repo"
             safe_remove /tmp/*
             if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "true" ]; then
-              safe_remove "$HOME/.ccache_${{ github.event.inputs.FILE }}"
+              safe_remove "/mnt/ccache_${{ github.event.inputs.FILE }}"
             fi
           else
             echo "Space cleanup disabled (SPACE_NOCLEAN=true)"
           fi
 
-          df -h /
+          df -h
           echo "::endgroup::"
 
       - name: 🆘 Emergency Cleanup (if build fails)
@@ -1173,5 +1205,5 @@ jobs:
           sudo rm -rf kernel_workspace/kernel_platform/out/*/intermediates 2>/dev/null || true
           sudo rm -rf /var/log/* /tmp/* /var/tmp/* 2>/dev/null || true
           sudo rm -rf ~/.cache/* 2>/dev/null || true
-          df -h /
+          df -h
           echo "::endgroup::"
