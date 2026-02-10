@@ -171,12 +171,27 @@ jobs:
           remove-dotnet: "true"
           remove-android: "true"
           remove-haskell: "true"
-          remove-codeql: "true"      
+          remove-codeql: "true"
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            python3 git curl jq ccache libelf-dev build-essential flex bison libssl-dev \
+            libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix \
+            kmod libdw-dev elfutils zip
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* || true
+          df -h
 
       - name: Extract Manifest Info
         id: extract_info
         env:
           FILE: ${{ github.event.inputs.FILE }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -e
           cd "$GITHUB_WORKSPACE"
@@ -213,7 +228,13 @@ jobs:
             local API_URL="https://api.github.com/repos/${OWNER}/${REPO_NAME}"
 
             echo "Trying to fetch branch list from ${OWNER}/${REPO_NAME}..."
-            BRANCHES=$(curl -fsL "$API_URL/branches" | jq -r 'if type=="array" then .[].name else empty end' 2>/dev/null || true)
+            BRANCHES=$(
+              curl -fsL \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$API_URL/branches" \
+              | jq -r 'if type=="array" then .[].name else empty end' 2>/dev/null || true
+            )
 
             if [[ -z "$BRANCHES" ]]; then
               echo "Failed to fetch branch list for ${OWNER}/${REPO_NAME}."
@@ -286,6 +307,15 @@ jobs:
             echo "README.md download failed or is empty"
           fi
 
+          if [[ -z "${CPUD:-}" ]]; then
+            CPUD="canoe"
+            echo "CPUD=$CPUD" >> "$GITHUB_ENV"
+          fi
+          if [[ -z "${BUILD_METHOD:-}" ]]; then
+            BUILD_METHOD="perf"
+            echo "BUILD_METHOD=$BUILD_METHOD" >> "$GITHUB_ENV"
+          fi
+
           echo "Parsing manifest to obtain PATH_2..."
           PATH_2=""
           if [[ "$CPU" == sm* ]]; then
@@ -320,6 +350,7 @@ jobs:
           echo "value=${FILE_BASE}_Android${ANDROID_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Debug Show Selected Inputs
+        shell: bash
         run: |
           echo "-----------------------"
           echo "Selected CPU: ${{ env.CPU }}"
@@ -348,6 +379,7 @@ jobs:
           echo "-----------------------"
 
       - name: Check Disk Space
+        shell: bash
         run: df -h
 
       - name: Set Cache Environment
@@ -360,22 +392,10 @@ jobs:
           echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache_${{ github.event.inputs.FILE }}"
 
       - name: Configure Git
+        shell: bash
         run: |
           git config --global user.name "OnePlus"
           git config --global user.email "OnePlus@qq.com"
-
-      - name: Install Dependencies (no apt cache action)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3 git curl ccache libelf-dev build-essential flex bison libssl-dev \
-            libncurses-dev liblz4-tool zlib1g-dev libxml2-utils rsync unzip gawk dos2unix \
-            kmod libdw-dev elfutils jq zip
-          sudo apt-get clean
-          sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* || true
-          df -h
 
       - name: Restore Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
@@ -389,6 +409,7 @@ jobs:
 
       - name: Initialize Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
+        shell: bash
         run: |
           INIT_FLAG="${{ env.CCACHE_DIR }}/.ccache_initialized"
           if command -v ccache >/dev/null 2>&1; then
@@ -407,6 +428,7 @@ jobs:
           ccache -s || true
 
       - name: Install Repo Tool
+        shell: bash
         run: |
           curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
           chmod a+x ~/repo
@@ -429,15 +451,14 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p kernel_workspace && cd kernel_workspace         
-          
+          mkdir -p kernel_workspace && cd kernel_workspace
+
           mkdir -p .repo/manifests
           cp "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml" ".repo/manifests/${FILE}.xml"
           BASE_URL="https://github.com/${MANIFEST_REPO}/${MANIFEST_REPO_NAME}.git"
 
           echo "Initializing repo using $MANIFEST_REPO/$MANIFEST_REPO_NAME ($MANIFEST_BRANCH)..."
           repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
-
           repo sync -c -j8 --prune --no-clone-bundle --no-tags --force-sync
 
           for dir in kernel_platform/common kernel_platform/msm-kernel; do
@@ -448,7 +469,9 @@ jobs:
           done
 
       - name: Kernel Version Handling
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform
 
           BRANCH=""
@@ -472,28 +495,26 @@ jobs:
             echo "No BRANCH found in build.config* and ACK_SHA files"
           fi
 
-          ORIG_VERSION=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)
-
           SUBLEVEL_INPUT="${{ github.event.inputs.SUBLEVEL }}"
           if [ -n "$SUBLEVEL_INPUT" ]; then
-            echo "Changing SUBLEVEL to $SUBLEVEL_INPUT"
             sed -i "s/^\(SUBLEVEL[[:space:]]*=[[:space:]]*\).*/\1$SUBLEVEL_INPUT/" ./common/Makefile
-          else
-            echo "No SUBLEVEL specified, keeping default"
           fi
 
           NEW_VERSION=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' ./common/Makefile)
           echo "TKERNEL_VERSION=$NEW_VERSION" >> "$GITHUB_ENV"
 
           if [ -n "$BRANCH" ]; then
-            echo "KV1=${BRANCH#*-}" | cut -d. -f1 >> "$GITHUB_ENV"
-            echo "KV2=${BRANCH#*-}" | tr -d '.' >> "$GITHUB_ENV"
+            KV="${BRANCH#*-}"
+            echo "KV1=${KV%%.*}" >> "$GITHUB_ENV"
+            echo "KV2=$(echo "$KV" | tr -d '.')" >> "$GITHUB_ENV"
           fi
-          echo "KV3=${NEW_VERSION}" | tr -d '.' >> "$GITHUB_ENV"
+          echo "KV3=$(echo "$NEW_VERSION" | tr -d '.')" >> "$GITHUB_ENV"
 
       - name: Custom Kernel Suffix if set
         if: ${{ github.event.inputs.SUFFIX != '' }}
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace
           SUFFIX="${{ github.event.inputs.SUFFIX }}"
           KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
@@ -525,7 +546,9 @@ jobs:
 
       - name: Custom Kernel Random Suffix if empty
         if: ${{ github.event.inputs.SUFFIX == '' }}
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace
           KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
 
@@ -560,7 +583,9 @@ jobs:
 
       - name: Resolve Manager Source
         id: manager
+        shell: bash
         run: |
+          set -euo pipefail
           MANAGER_SOURCE="${{ github.event.inputs.MANAGER_SOURCE }}"
 
           case "$MANAGER_SOURCE" in
@@ -578,7 +603,9 @@ jobs:
           echo "manager_artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
       - name: Add ReSukiSU
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform
           MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
           KSU_META="${{ github.event.inputs.KSU_META }}"
@@ -611,7 +638,9 @@ jobs:
       - name: Apply Patches ReSukiSU
         env:
           FILE: ${{ github.event.inputs.FILE }}
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace
 
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
@@ -674,7 +703,9 @@ jobs:
 
       - name: Apply Unicode Bypass
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
+        shell: bash
         run: |
+          set -euo pipefail
           PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
           cd kernel_workspace/kernel_platform/common
           if [ "${KV1:-0}" -lt 6 ]; then
@@ -685,13 +716,17 @@ jobs:
 
       - name: Apply LSM_BBG
         if: ${{ github.event.inputs.LSM == 'true' }}
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform/common
           curl -LSs https://raw.githubusercontent.com/vc-teahouse/Baseband-guard/main/setup.sh | bash -s fix_blkdev_rename
           sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' ./security/Kconfig
 
       - name: Add Configuration Settings
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform/common
           CONFIG_FILE=./arch/arm64/configs/gki_defconfig
           MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
@@ -788,7 +823,9 @@ jobs:
 
       - name: Fix IPv6_NAT Error
         if: ${{ github.event.inputs.NETFILTER == 'true' }}
+        shell: bash
         run: |
+          set -euo pipefail
           PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
           cd kernel_workspace/kernel_platform/common
           if [[ "${CPU}" == sm* ]]; then
@@ -800,6 +837,7 @@ jobs:
       - name: Custom BUILD_TIME
         shell: bash
         run: |
+          set -euo pipefail
           INPUT_TIME="${{ github.event.inputs.BUILD_TIME }}"
           if [[ -n "$INPUT_TIME" && "$INPUT_TIME" != "F" && "$INPUT_TIME" != "f" ]]; then
             DATESTR="$INPUT_TIME"
@@ -823,7 +861,7 @@ jobs:
         if: ${{ env.KERNEL_VERSION == '6.12' }}
         shell: bash
         run: |
-          set -e
+          set -euo pipefail
           echo "Disabling module name protection for kernel 6.12"
           sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' \
             kernel_workspace/kernel_platform/common/BUILD.bazel
@@ -849,16 +887,16 @@ jobs:
           trap 'echo "Cleaning intermediate files..."; rm -rf "$ROOT/kernel_platform/common/out/"*/intermediates "$ROOT/kernel_platform/out/"*/intermediates 2>/dev/null || true; df -h / "$GITHUB_WORKSPACE"' EXIT
 
           echo "::group::Building Kernel"
+          pwd
+          ls -la
+
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
-
           elif [ -x "tools/bazel" ]; then
             tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist
-
           elif [ -f "kernel_platform/oplus/build/oplus_build_kernel.sh" ]; then
             LTO=none SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
               ./kernel_platform/oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
-
           else
             echo "No known build entrypoint found."
             exit 1
@@ -871,7 +909,9 @@ jobs:
           echo "::endgroup::"
 
       - name: Make AnyKernel3
+        shell: bash
         run: |
+          set -euo pipefail
           git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
@@ -892,7 +932,9 @@ jobs:
 
       - name: Apply patch_linux and Replace Image
         if: ${{ github.event.inputs.KPM == 'KPM' }}
+        shell: bash
         run: |
+          set -euo pipefail
           PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/SukiSU_patch/kpm"
           OUT_DIR="${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/out/Final-Image-Find"
           cd "${OUT_DIR}"
@@ -905,14 +947,28 @@ jobs:
 
       - name: Set zip Suffix
         id: suffix
+        shell: bash
         run: |
+          set -euo pipefail
           echo "value=${{ github.event.inputs.KPM == 'KPM' && '_KPM' || '' }}${{ github.event.inputs.LSM == 'true' && '_LSM' || '' }}_${{ github.event.inputs.MANAGER_SOURCE }}" >> "$GITHUB_OUTPUT"
+
+      - name: Zip AnyKernel3
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd AnyKernel3
+          ZIP_NAME="AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}.zip"
+          zip -r9 "${ZIP_NAME}" ./* -x "*.git*"
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          ls -la "${ZIP_NAME}"
 
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v4
         with:
           name: AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}
-          path: ./AnyKernel3/*
+          path: |
+            AnyKernel3/*.zip
+            AnyKernel3/Image
 
       - name: 📊 Calculate Build Metrics
         id: metrics
@@ -941,18 +997,13 @@ jobs:
           echo "WARNINGS_COUNT=${WARNINGS_COUNT}" >> "$GITHUB_ENV"
 
           cd AnyKernel3
-          ZIP_NAME="AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}.zip"
-
-          if [ ! -f "${ZIP_NAME}" ]; then
-            zip -r9 "${ZIP_NAME}" ./* -x "*.git*"
-          fi
+          ZIP_NAME="${ZIP_NAME:-AnyKernel3.zip}"
 
           ZIP_SHA256=$(sha256sum "${ZIP_NAME}" | awk '{print $1}')
           ZIP_SIZE=$(du -h "${ZIP_NAME}" | awk '{print $1}')
           IMAGE_SHA256=$(sha256sum Image | awk '{print $1}')
           IMAGE_SIZE=$(du -h Image | awk '{print $1}')
 
-          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
           echo "ZIP_SHA256=${ZIP_SHA256}" >> "$GITHUB_ENV"
           echo "ZIP_SIZE=${ZIP_SIZE}" >> "$GITHUB_ENV"
           echo "IMAGE_SHA256=${IMAGE_SHA256}" >> "$GITHUB_ENV"
@@ -997,47 +1048,13 @@ jobs:
             KSU_COMMIT_LINK="N/A"
           fi
 
-          if [ "${{ github.event.inputs.KPM }}" = "KPM" ]; then
-            KPM_STATUS="✅ Enabled"
-          else
-            KPM_STATUS="❌ Disabled"
-          fi
-
-          if [ "${{ github.event.inputs.LSM }}" = "true" ]; then
-            LSM_STATUS="✅ Enabled"
-          else
-            LSM_STATUS="❌ Disabled"
-          fi
-
-          if [ "${{ github.event.inputs.BBR_ECN }}" = "true" ]; then
-            BBR_ECN_STATUS="✅ Enabled"
-          else
-            BBR_ECN_STATUS="❌ Disabled"
-          fi
-
-          if [ "${{ github.event.inputs.NETFILTER }}" = "true" ]; then
-            NETFILTER_STATUS="✅ Enabled (IPSET & IPv6 NAT)"
-          else
-            NETFILTER_STATUS="❌ Disabled"
-          fi
-
-          if [ "${{ github.event.inputs.UNICODE_BYPASS }}" = "true" ]; then
-            UNICODE_FIX_STATUS="✅ Enabled"
-          else
-            UNICODE_FIX_STATUS="❌ Disabled"
-          fi
-
-          if [ "${{ github.event.inputs.SUSFS_DEV }}" = "true" ]; then
-            SUSFS_DEV_MODE="✅ Yes"
-          else
-            SUSFS_DEV_MODE="❌ No"
-          fi
-
-          if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "true" ]; then
-            CCACHE_STATUS="❌ Disabled"
-          else
-            CCACHE_STATUS="✅ Enabled (8GB max)"
-          fi
+          if [ "${{ github.event.inputs.KPM }}" = "KPM" ]; then KPM_STATUS="✅ Enabled"; else KPM_STATUS="❌ Disabled"; fi
+          if [ "${{ github.event.inputs.LSM }}" = "true" ]; then LSM_STATUS="✅ Enabled"; else LSM_STATUS="❌ Disabled"; fi
+          if [ "${{ github.event.inputs.BBR_ECN }}" = "true" ]; then BBR_ECN_STATUS="✅ Enabled"; else BBR_ECN_STATUS="❌ Disabled"; fi
+          if [ "${{ github.event.inputs.NETFILTER }}" = "true" ]; then NETFILTER_STATUS="✅ Enabled (IPSET & IPv6 NAT)"; else NETFILTER_STATUS="❌ Disabled"; fi
+          if [ "${{ github.event.inputs.UNICODE_BYPASS }}" = "true" ]; then UNICODE_FIX_STATUS="✅ Enabled"; else UNICODE_FIX_STATUS="❌ Disabled"; fi
+          if [ "${{ github.event.inputs.SUSFS_DEV }}" = "true" ]; then SUSFS_DEV_MODE="✅ Yes"; else SUSFS_DEV_MODE="❌ No"; fi
+          if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "true" ]; then CCACHE_STATUS="❌ Disabled"; else CCACHE_STATUS="✅ Enabled (8GB max)"; fi
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           # OnePlus 15 ReSukiSU Kernel Build Complete
@@ -1123,7 +1140,8 @@ jobs:
             safe_remove "kernel_workspace/kernel_platform/common/out"
             safe_remove "kernel_workspace/kernel_platform/out"
             safe_remove "kernel_workspace/.repo"
-            safe_remove "/tmp"/*
+            sudo rm -rf /tmp/* 2>/dev/null || true
+
             if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "true" ]; then
               safe_remove "${GITHUB_WORKSPACE}/.ccache_${{ github.event.inputs.FILE }}"
             fi
