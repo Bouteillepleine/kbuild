@@ -143,42 +143,20 @@ jobs:
           remove-dotnet: "true"
           remove-android: "true"
           remove-haskell: "true"
-          remove-codeql: "true"
-
-      - name: Relocate workspace to /mnt (big disk)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "::group::Disk before relocating workspace"
-          df -h
-          echo "::endgroup::"
-
-          sudo mkdir -p /mnt/work
-          sudo chown -R "$USER:$USER" /mnt/work
-
-          shopt -s dotglob
-          mv "$GITHUB_WORKSPACE"/* /mnt/work/ || true
-          shopt -u dotglob
-
-          rm -rf "$GITHUB_WORKSPACE"
-          ln -s /mnt/work "$GITHUB_WORKSPACE"
-
-          echo "::group::Disk after relocating workspace"
-          df -h
-          du -sh /mnt/work || true
-          echo "::endgroup::"
+          remove-codeql: "true"      
 
       - name: Create and Enable 8G Swap
         shell: bash
         run: |
           set -eux
           sudo swapoff -a || true
-          sudo rm -f /swapfile || true
-          sudo fallocate -l 8G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          sudo rm -f /mnt/swapfile || true
+          sudo fallocate -l 8G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
           free -h
+          swapon --show
 
       - name: Pre-build Space Boost (aggressive)
         if: ${{ github.event.inputs.SPACE_NOCLEAN == 'false' }}
@@ -385,7 +363,7 @@ jobs:
       - name: Check Disk Space
         run: df -h
 
-      - name: Set Cache Environment (ccache on /mnt)
+      - name: Set Cache Environment
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
         shell: bash
         run: |
@@ -462,6 +440,11 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p kernel_workspace && cd kernel_workspace
+
+          mkdir -p /mnt/repo-cache
+          rm -rf .repo || true
+          ln -s /mnt/repo-cache .repo
+          
           mkdir -p .repo/manifests
           cp "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml" ".repo/manifests/${FILE}.xml"
           BASE_URL="https://github.com/${MANIFEST_REPO}/${MANIFEST_REPO_NAME}.git"
