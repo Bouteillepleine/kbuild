@@ -796,18 +796,21 @@ jobs:
           git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           mkdir -p kernel_workspace/out/Final-Image-Find/
-
-          image_path=$(find "./kernel_workspace/common/out/" -name "Image" | head -n 1)
-          if [ -z "$image_path" ]; then
-            image_path=$(find "./kernel_workspace/out/" -name "Image" | head -n 1)
+      
+          image_path="$(find "./kernel_workspace/common/out/" -name "Image" 2>/dev/null | head -n 1 || true)"
+          if [ -z "${image_path:-}" ]; then
+            image_path="$(find "./kernel_workspace/out/" -name "Image" 2>/dev/null | head -n 1 || true)"
           fi
-
-          if [ -z "$image_path" ] || [ ! -f "$image_path" ]; then
-            echo "Image not found; build failed" >&2
+          if [ -z "${image_path:-}" ]; then
+            image_path="$(find "./kernel_workspace" -path "*/dist/Image" -type f 2>/dev/null | head -n 1 || true)"
+          fi
+      
+          if [ -z "${image_path:-}" ] || [ ! -f "$image_path" ]; then
+            echo "Image file not found, build failed or output path differs" >&2
             exit 1
           fi
-
-          echo "Image file located at: $image_path"
+      
+          echo "Image found at: $image_path"
           cp "$image_path" ./AnyKernel3/Image
           cp "$image_path" kernel_workspace/out/Final-Image-Find/Image
 
@@ -848,8 +851,9 @@ jobs:
         with:
           name: AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}
           path: |
-            AnyKernel3/*.zip
             AnyKernel3/Image
+            AnyKernel3/*.zip
+
 
       - name: 📊 Calculate Build Metrics
         id: metrics
