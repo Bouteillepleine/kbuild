@@ -347,7 +347,7 @@ jobs:
 
           commit_if_git_repo() {
             local repo_dir="$1"
-            [ -d "$repo_dir/.git" ] || return 0
+            [ -e "$repo_dir/.git" ] || return 0
 
             echo "::group::Git commit in $repo_dir"
             if [ -n "$(git -C "$repo_dir" status --porcelain)" ]; then
@@ -408,7 +408,7 @@ jobs:
 
           commit_if_git_repo() {
             local repo_dir="$1"
-            [ -d "$repo_dir/.git" ] || return 0
+            [ -e "$repo_dir/.git" ] || return 0
 
             echo "::group::Git commit in $repo_dir"
             if [ -n "$(git -C "$repo_dir" status --porcelain)" ]; then
