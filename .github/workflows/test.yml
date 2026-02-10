@@ -134,30 +134,6 @@ jobs:
         run: |
           echo "BUILD_START_TIME=$(date +%s)" >> "$GITHUB_ENV"
 
-      - name: Maximize Build Space
-        if: ${{ github.event.inputs.SPACE_NOCLEAN == 'false' }}
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          remove-dotnet: "true"
-          remove-android: "true"
-          remove-haskell: "true"
-          remove-codeql: "true"      
-
-      - name: Create and Enable 8G Swap
-        shell: bash
-        run: |
-          set -eux
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile || true
-          sudo fallocate -l 8G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h
-          swapon --show
-
       - name: Pre-build Space Boost (aggressive)
         if: ${{ github.event.inputs.SPACE_NOCLEAN == 'false' }}
         shell: bash
@@ -185,6 +161,17 @@ jobs:
           echo "::group::Disk after cleanup"
           df -h
           echo "::endgroup::"
+
+      - name: Maximize Build Space
+        if: ${{ github.event.inputs.SPACE_NOCLEAN == 'false' }}
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"      
 
       - name: Extract Manifest Info
         id: extract_info
@@ -368,9 +355,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          echo "CCACHE_DIR=/mnt/ccache_${{ github.event.inputs.FILE }}" >> "$GITHUB_ENV"
-          mkdir -p "/mnt/ccache_${{ github.event.inputs.FILE }}"
-          echo "CCACHE_DIR=/mnt/ccache_${{ github.event.inputs.FILE }}"
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache_${{ github.event.inputs.FILE }}" >> "$GITHUB_ENV"
+          mkdir -p "${GITHUB_WORKSPACE}/.ccache_${{ github.event.inputs.FILE }}"
+          echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache_${{ github.event.inputs.FILE }}"
 
       - name: Configure Git
         run: |
@@ -439,11 +426,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p kernel_workspace && cd kernel_workspace
-
-          mkdir -p /mnt/repo-cache
-          rm -rf .repo || true
-          ln -s /mnt/repo-cache .repo
+          mkdir -p kernel_workspace && cd kernel_workspace         
           
           mkdir -p .repo/manifests
           cp "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml" ".repo/manifests/${FILE}.xml"
@@ -1157,7 +1140,7 @@ jobs:
             local path="$1"
             if [ -e "$path" ]; then
               echo "Removing: $path"
-              sudo rm -rf $path 2>/dev/null || true
+              sudo rm -rf "$path" 2>/dev/null || true
             else
               echo "Path does not exist: $path"
             fi
@@ -1167,9 +1150,9 @@ jobs:
             safe_remove "kernel_workspace/kernel_platform/common/out"
             safe_remove "kernel_workspace/kernel_platform/out"
             safe_remove "kernel_workspace/.repo"
-            safe_remove /tmp/*
+            safe_remove "/tmp"/*
             if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "true" ]; then
-              safe_remove "/mnt/ccache_${{ github.event.inputs.FILE }}"
+              safe_remove "${GITHUB_WORKSPACE}/.ccache_${{ github.event.inputs.FILE }}"
             fi
           else
             echo "Space cleanup disabled (SPACE_NOCLEAN=true)"
