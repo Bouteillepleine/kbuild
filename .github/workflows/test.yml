@@ -345,12 +345,27 @@ jobs:
           SUFFIX="${{ github.event.inputs.SUFFIX }}"
           KANDROID_VERSION="${{ env.KANDROID_VERSION }}"
 
-          for path in \
-            common/scripts/setlocalversion \
-            msm-kernel/scripts/setlocalversion \
-            external/dtc/scripts/setlocalversion; do
+          commit_if_git_repo() {
+            local repo_dir="$1"
+            [ -d "$repo_dir/.git" ] || return 0
 
-            [ -f "$path" ] || continue
+            echo "::group::Git commit in $repo_dir"
+            if [ -n "$(git -C "$repo_dir" status --porcelain)" ]; then
+              git -C "$repo_dir" add -A
+              git -C "$repo_dir" commit -m "Custom suffix & removed -dirty" || true
+            else
+              echo "No changes in $repo_dir"
+            fi
+            echo "::endgroup::"
+          }
+
+          # Track which repos we touched
+          touched_repos=()
+
+          apply_suffix() {
+            local path="$1"
+            [ -f "$path" ] || return 0
+
             echo "Modifying: $path"
 
             sed -i 's/ -dirty//g' "$path"
@@ -365,10 +380,19 @@ jobs:
             fi
 
             chmod +x "$path"
-          done
 
-          git add -A
-          git commit -m "Custom suffix & removed -dirty" || true
+            # Record owning repo dir (first path component)
+            touched_repos+=("${path%%/*}")
+          }
+
+          apply_suffix "common/scripts/setlocalversion"
+          apply_suffix "msm-kernel/scripts/setlocalversion"
+          apply_suffix "external/dtc/scripts/setlocalversion"
+
+          # Commit only in repos that exist and were touched (unique)
+          for repo_dir in $(printf "%s\n" "${touched_repos[@]}" | sort -u); do
+            commit_if_git_repo "$repo_dir"
+          done
 
       - name: Custom Kernel Random Suffix if empty
         if: ${{ github.event.inputs.SUFFIX == '' }}
@@ -382,12 +406,26 @@ jobs:
           RANDOM_HASH=$(od -An -N7 -tx1 /dev/urandom | tr -d ' \n')
           RANDOM_SUFFIX="${RANDOM_DIGIT}-o-g${RANDOM_HASH}"
 
-          for path in \
-            common/scripts/setlocalversion \
-            msm-kernel/scripts/setlocalversion \
-            external/dtc/scripts/setlocalversion; do
+          commit_if_git_repo() {
+            local repo_dir="$1"
+            [ -d "$repo_dir/.git" ] || return 0
 
-            [ -f "$path" ] || continue
+            echo "::group::Git commit in $repo_dir"
+            if [ -n "$(git -C "$repo_dir" status --porcelain)" ]; then
+              git -C "$repo_dir" add -A
+              git -C "$repo_dir" commit -m "Random suffix & remove -dirty" || true
+            else
+              echo "No changes in $repo_dir"
+            fi
+            echo "::endgroup::"
+          }
+
+          touched_repos=()
+
+          apply_suffix() {
+            local path="$1"
+            [ -f "$path" ] || return 0
+
             echo "Modifying: $path"
 
             sed -i 's/ -dirty//g' "$path"
@@ -402,10 +440,16 @@ jobs:
             fi
 
             chmod +x "$path"
-          done
+            touched_repos+=("${path%%/*}")
+          }
 
-          git add -A
-          git commit -m "Random suffix & remove -dirty" || true
+          apply_suffix "common/scripts/setlocalversion"
+          apply_suffix "msm-kernel/scripts/setlocalversion"
+          apply_suffix "external/dtc/scripts/setlocalversion"
+
+          for repo_dir in $(printf "%s\n" "${touched_repos[@]}" | sort -u); do
+            commit_if_git_repo "$repo_dir"
+          done
 
       - name: Resolve Manager Source
         id: manager
