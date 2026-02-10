@@ -1,4 +1,4 @@
-name: OnePlus ReSukiSU (AOSP)
+name: OnePlus ReSukiSU
 
 on:
   workflow_dispatch:
