@@ -383,6 +383,9 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-${{ env.BUILD_METHOD }}-16
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-
+            ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-
 
       - name: Initialize Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
@@ -841,60 +844,30 @@ jobs:
         run: |
           set -ex
           cd kernel_workspace
+          ROOT="$PWD"
 
-          trap '
-            echo "Cleaning intermediate files...";
-            rm -rf kernel_platform/common/out/*/intermediates kernel_platform/out/*/intermediates 2>/dev/null || true;
-            df -h
-          ' EXIT
-
-          echo "::group::Detect build entrypoints"
-          for p in \
-            build/build.sh \
-            tools/bazel \
-            kernel_platform/build_with_bazel.py \
-            kernel_platform/oplus/build/oplus_build_kernel.sh
-          do
-            [ -e "$p" ] && echo "Found: $p"
-          done
-          echo "::endgroup::"
-
-          echo "::group::Disk before build"
-          df -h
-          echo "::endgroup::"
+          trap 'echo "Cleaning intermediate files..."; rm -rf "$ROOT/kernel_platform/common/out/"*/intermediates "$ROOT/kernel_platform/out/"*/intermediates 2>/dev/null || true; df -h / "$GITHUB_WORKSPACE"' EXIT
 
           echo "::group::Building Kernel"
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
+
           elif [ -x "tools/bazel" ]; then
             tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist
+
+          elif [ -f "kernel_platform/oplus/build/oplus_build_kernel.sh" ]; then
+            LTO=none SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
+              ./kernel_platform/oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
+
           else
-            if [ -f "kernel_platform/build_with_bazel.py" ]; then
-              cd kernel_platform
-              ./build_with_bazel.py -t "${CPUD}" "${BUILD_METHOD}"
-            elif [ -f "kernel_platform/oplus/build/oplus_build_kernel.sh" ]; then
-              cd kernel_platform
-              LTO=none SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
-                ./oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
-            else
-              if ! command -v bazel >/dev/null 2>&1; then
-                sudo curl -fsSL -o /usr/local/bin/bazel \
-                  https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
-                sudo chmod +x /usr/local/bin/bazel
-              fi
-              if [ -d "common" ] && [ -f "common/BUILD.bazel" ]; then
-                bazel build --config=fast --lto=none //common:kernel_aarch64_dist
-              else
-                echo "No known build entrypoint found."
-                exit 1
-              fi
-            fi
+            echo "No known build entrypoint found."
+            exit 1
           fi
           echo "::endgroup::"
 
           echo "::group::Post-Build Cleanup"
-          rm -rf kernel_platform/common/out/*/intermediates kernel_platform/out/*/intermediates 2>/dev/null || true
-          df -h
+          rm -rf "$ROOT/kernel_platform/common/out/"*/intermediates "$ROOT/kernel_platform/out/"*/intermediates 2>/dev/null || true
+          df -h / "$GITHUB_WORKSPACE"
           echo "::endgroup::"
 
       - name: Make AnyKernel3
