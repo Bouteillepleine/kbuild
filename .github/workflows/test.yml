@@ -857,8 +857,7 @@ jobs:
             fi
           done
 
-      - name: Modules (Kernel 6.12 only)
-        if: ${{ env.KERNEL_VERSION == '6.12' }}
+      - name: Modules        
         shell: bash
         run: |
           set -euo pipefail
@@ -883,26 +882,36 @@ jobs:
           set -ex
           cd kernel_workspace
           ROOT="$PWD"
-
+      
+          : "${CPUD:=canoe}"
+          : "${BUILD_METHOD:=perf}"
+      
           trap 'echo "Cleaning intermediate files..."; rm -rf "$ROOT/kernel_platform/common/out/"*/intermediates "$ROOT/kernel_platform/out/"*/intermediates 2>/dev/null || true; df -h / "$GITHUB_WORKSPACE"' EXIT
-
+      
           echo "::group::Building Kernel"
           pwd
           ls -la
-
-          if [ -f "build/build.sh" ]; then
+      
+          if [ -f "kernel_platform/build/build.sh" ]; then
+            cd kernel_platform
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
-          elif [ -x "tools/bazel" ]; then
-            tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist
+      
+          elif [ -x "kernel_platform/tools/bazel" ]; then
+            cd kernel_platform
+            tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist      
+          
           elif [ -f "kernel_platform/oplus/build/oplus_build_kernel.sh" ]; then
+            cd "$ROOT"
             LTO=none SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 \
               ./kernel_platform/oplus/build/oplus_build_kernel.sh "${CPUD}" "${BUILD_METHOD}"
+      
           else
             echo "No known build entrypoint found."
             exit 1
           fi
+      
           echo "::endgroup::"
-
+      
           echo "::group::Post-Build Cleanup"
           rm -rf "$ROOT/kernel_platform/common/out/"*/intermediates "$ROOT/kernel_platform/out/"*/intermediates 2>/dev/null || true
           df -h / "$GITHUB_WORKSPACE"
