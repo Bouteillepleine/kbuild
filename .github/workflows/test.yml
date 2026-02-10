@@ -541,35 +541,53 @@ jobs:
 
           GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
           SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
-
-          if [ "$GKI_V" == "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
-            cp ../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
-            patch -p1 < fix_5.15.legacy.patch
-          fi
-
+          
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            fake_patched=0
-
-            if [ "$GKI_V" = "android15-6.6" ]; then
-              if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
-                fake_patched=1
-              fi
-            fi
+            fake_patched=0            
 
             patch -p1 < 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-
-            if [ "$fake_patched" = 1 ]; then
-              if [ "$GKI_V" = "android15-6.6" ]; then
-                sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c || true
-              fi
-            fi
-
+            
             if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
               cp ../Action-Build/patches/No_5uS.patch ./
               patch -p1 < No_5uS.patch || true
             fi
           fi
+
+      - name: 🔍 Capture SUSFS Metadata
+        if: ${{ github.event.inputs.SUSFS_META != '-1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SUSFS_DIR="$GITHUB_WORKSPACE/kernel_workspace/susfs4ksu"
+          if [ ! -d "$SUSFS_DIR" ]; then
+            echo "SUSFS dir not found: $SUSFS_DIR"
+            exit 1
+          fi
+
+          cd "$SUSFS_DIR"
+
+          SUSFS_COMMIT="$(git rev-parse HEAD)"
+          SUSFS_SHORT_COMMIT="$(git rev-parse --short HEAD)"
+          echo "SUSFS_COMMIT_SHA=${SUSFS_COMMIT}" >> "$GITHUB_ENV"
+          echo "SUSFS_SHORT_COMMIT=${SUSFS_SHORT_COMMIT}" >> "$GITHUB_ENV"
+
+          SUSFS_BRANCH="gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}"
+          echo "SUSFS_BRANCH_NAME=${SUSFS_BRANCH}" >> "$GITHUB_ENV"
+
+          if [ -f "VERSION" ]; then
+            SUSFS_VER="$(tr -d '\n' < VERSION)"
+          elif [ -f "README.md" ] && grep -q "SUSFS.*v[0-9]" README.md 2>/dev/null; then
+            SUSFS_VER="$(grep -oP "SUSFS.*v\K[0-9]+\.[0-9]+\.[0-9]+" README.md | head -1)"
+          else
+            SUSFS_VER="2.0.0+"
+          fi
+          echo "SUSVER=${SUSFS_VER}" >> "$GITHUB_ENV"
+
+          echo "✅ SUSFS Metadata captured:"
+          echo "  - Commit: ${SUSFS_COMMIT}"
+          echo "  - Branch: ${SUSFS_BRANCH}"
+          echo "  - Version: ${SUSFS_VER}"
 
       - name: Apply Unicode Bypass
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
