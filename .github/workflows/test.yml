@@ -515,6 +515,9 @@ jobs:
           # Fetch patch repos
           [ -d "SukiSU_patch" ] || git clone https://github.com/ShirkNeko/SukiSU_patch.git
           [ -d "Action-Build" ] || git clone https://github.com/Numbersf/Action-Build.git
+          # Fetch extra patch repo (WildKernels)
+          [ -d "kernel_patches" ] || git clone --depth=1 https://github.com/WildKernels/kernel_patches.git
+          KERNEL_PATCHES_FOLDER="${GITHUB_WORKSPACE}/kernel_workspace/kernel_patches"
 
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
@@ -539,20 +542,28 @@ jobs:
 
           cd ./common
 
-          GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
-          SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
-          
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            fake_patched=0            
-
-            patch -p1 < 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-            
+            echo "Applying base SUSFS patch..."
+            patch -p1 --forward < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
+          
             if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
               cp ../Action-Build/patches/No_5uS.patch ./
-              patch -p1 < No_5uS.patch || true
+              patch -p1 --forward < No_5uS.patch || true
             fi
+          
+            # Apply SusFS fix patches from WildKernels (ONLY when SUSFS is enabled)
+            SUSFS_FIX_VER="v2.0.0"
+            FIX_DIR="${KERNEL_PATCHES_FOLDER}/next/susfs_fix_patches/${SUSFS_FIX_VER}"
+          
+            echo "Applying WildKernels SUSFS fix patches from: ${FIX_DIR}"
+            patch -p1 --forward < "${FIX_DIR}/overwrite_hook_mode.patch"
+            echo "Patching KSU_TOOLKIT Support for SusFS kernel!"
+            patch -p1 --forward < "${FIX_DIR}/ksu_toolkit.patch"
+            echo "Patching Multi-manager Support for SusFS kernel!"
+            patch -p1 --forward < "${FIX_DIR}/multi_manager.patch"
+          else
+            echo "SUSFS disabled (SUSFS_META=-1). Skipping SUSFS/WildKernels patches."
           fi
-
       - name: 🔍 Capture SUSFS Metadata
         if: ${{ github.event.inputs.SUSFS_META != '-1' }}
         shell: bash
