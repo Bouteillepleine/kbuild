@@ -224,13 +224,14 @@ jobs:
 
       - name: Restore Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-aosp-16
+          key: ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-aosp-16-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.event.inputs.FILE }}-
+            ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-aosp-16-
             ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-
+            ccache-${{ runner.os }}-
 
       - name: Initialize Ccache
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
@@ -774,6 +775,41 @@ jobs:
             exit 1
           fi
 
+      - name: Enable ccache wrappers (clang/gcc)
+        if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "CCACHE_DIR=${CCACHE_DIR}"
+          ccache --version || true
+
+          if [ -d /usr/lib/ccache ]; then
+            # Apply immediately for this step...
+            export PATH="/usr/lib/ccache:$PATH"
+            # ...and persist for later steps
+            echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"
+            echo "Prepended /usr/lib/ccache to PATH (now + next steps)"
+          else
+            echo "WARN: /usr/lib/ccache not found; wrappers may not work."
+          fi
+
+          # Helps cache hits when paths differ between runs
+          echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
+          echo "CCACHE_COMPRESS=true" >> "$GITHUB_ENV"
+          echo "CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime" >> "$GITHUB_ENV"
+
+          echo "::group::ccache stats (pre-build)"
+          ccache -s || true
+          echo "::endgroup::"
+
+          echo "::group::Which compilers will be used?"
+          command -v ccache || true
+          command -v clang || true
+          command -v clang++ || true
+          clang --version || true
+          echo "::endgroup::"
+
       - name: Build Kernel
         shell: bash
         run: |
@@ -783,12 +819,22 @@ jobs:
 
           trap 'echo "Cleaning intermediate files..."; rm -rf "$ROOT/common/out/"*/intermediates "$ROOT/out/"*/intermediates 2>/dev/null || true; df -h / "$GITHUB_WORKSPACE"' EXIT
 
+          if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "false" ]; then
+            export USE_CCACHE=1
+            export CCACHE_EXEC="$(command -v ccache)"
+            export CCACHE_DIR="${CCACHE_DIR}"
+          fi
+
           echo "::group::Building Kernel"
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
           else
             tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist
           fi
+          echo "::endgroup::"
+
+          echo "::group::ccache stats (post-build)"
+          ccache -s || true
           echo "::endgroup::"
 
           echo "::group::Post-Build Cleanup"
