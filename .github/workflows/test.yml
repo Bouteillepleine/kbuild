@@ -511,18 +511,16 @@ jobs:
         run: |
           set -euo pipefail
           cd kernel_workspace
-
+      
           # Fetch patch repos
           [ -d "SukiSU_patch" ] || git clone https://github.com/ShirkNeko/SukiSU_patch.git
-          [ -d "Action-Build" ] || git clone https://github.com/Numbersf/Action-Build.git
-          # Fetch extra patch repo (WildKernels)
-          [ -d "kernel_patches" ] || git clone --depth=1 https://github.com/WildKernels/kernel_patches.git
-          KERNEL_PATCHES_FOLDER="${GITHUB_WORKSPACE}/kernel_workspace/kernel_patches"
-
+          # Branch contains patches/ksu_toolkit.patch
+          [ -d "Action-Build" ] || git clone --depth=1 -b SukiSU-Ultra https://github.com/Numbersf/Action-Build.git
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
             BR="gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}"
-
+      
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$BR" susfs4ksu
             cd susfs4ksu
             if [ -n "$SUSFS_META" ]; then
@@ -534,32 +532,34 @@ jobs:
             SUSFS_COMMIT_SHA="$(git rev-parse HEAD || true)"
             echo "SUSFS_COMMIT_SHA=$SUSFS_COMMIT_SHA" >> "$GITHUB_ENV"
             cd ..
-
+      
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           fi
-
+      
           cd ./common
-
+      
+          echo "Applying ksu_toolkit.patch (Action-Build SukiSU-Ultra)..."
+          if [ -f ../Action-Build/patches/ksu_toolkit.patch ]; then
+            patch -p1 --forward < ../Action-Build/patches/ksu_toolkit.patch || \
+              echo "WARN: ksu_toolkit.patch failed or already applied; continuing..."
+          else
+            echo "WARN: ksu_toolkit.patch not found; skipping..."
+          fi
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             echo "Applying base SUSFS patch..."
-            patch -p1 --forward < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch"
-          
+            patch -p1 --forward < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" || true
+      
             if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
               cp ../Action-Build/patches/No_5uS.patch ./
               patch -p1 --forward < No_5uS.patch || true
             fi
-          
-            # Apply SusFS fix patches from WildKernels (ONLY when SUSFS is enabled)
-            SUSFS_FIX_VER="v2.0.0"
-            FIX_DIR="${KERNEL_PATCHES_FOLDER}/next/susfs_fix_patches/${SUSFS_FIX_VER}"
-                 
-            echo "Patching Multi-manager Support for SusFS kernel!"
-            patch -p1 --forward < "${FIX_DIR}/multi_manager.patch"
           else
-            echo "SUSFS disabled (SUSFS_META=-1). Skipping SUSFS/WildKernels patches."
-          fi
+            echo "SUSFS disabled (SUSFS_META=-1). Skipping SUSFS patches."
+          fi          
+            
       - name: 🔍 Capture SUSFS Metadata
         if: ${{ github.event.inputs.SUSFS_META != '-1' }}
         shell: bash
