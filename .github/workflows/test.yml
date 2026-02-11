@@ -5,7 +5,7 @@ on:
     inputs:
       FILE:
         type: choice
-        description: "AOSP kernel branch suffix (used as common-${FILE})"
+        description: "Oneplus 15 kernel branch suffix (used as common-${FILE})"
         required: true
         default: android16-6.12-2025-06
         options:
@@ -108,18 +108,22 @@ on:
         required: true
         default: false
 
+# ── Empêche les builds parallèles conflictuels sur la même config ──
+concurrency:
+  group: oneplus15-${{ github.event.inputs.FILE }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ github.event.inputs.KPM == 'KPM' && '[KPM] ' || github.event.inputs.KPM == 'KPN' && '[KPN] ' || '' }}${{ github.event.inputs.LSM == 'true' && '[LSM] ' || '' }}For ${{ github.event.inputs.FILE }} ${{ github.event.inputs.SUFFIX }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
 
     env:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
       CCACHE_MAXSIZE: 8G
-
-      # If you rely on CPU-conditional config, OnePlus 15 is Snapdragon; keep it simple:
       CPU: "sm8850"
 
     steps:
@@ -227,9 +231,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-aosp-16-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-${{ github.event.inputs.KPM }}-${{ github.event.inputs.NETFILTER }}-${{ github.event.inputs.BBR_ECN }}-${{ github.event.inputs.LSM }}-${{ github.sha }}
           restore-keys: |
-            ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-aosp-16-
+            ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-${{ github.event.inputs.KPM }}-${{ github.event.inputs.NETFILTER }}-${{ github.event.inputs.BBR_ECN }}-${{ github.event.inputs.LSM }}-
+            ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-${{ github.event.inputs.KPM }}-
             ccache-${{ runner.os }}-${{ github.event.inputs.FILE }}-
             ccache-${{ runner.os }}-
 
@@ -271,7 +276,7 @@ jobs:
             exit 1
           fi
 
-      - name: Initialize Repo and Sync (AOSP kernel/manifest)
+      - name: Initialize Repo and Sync
         shell: bash
         run: |
           set -euxo pipefail
@@ -286,7 +291,7 @@ jobs:
             --no-clone-bundle \
             --no-tags
 
-          repo sync -c -j8 \
+          repo sync -c -j$(nproc --all) \
             --prune \
             --no-clone-bundle \
             --no-tags \
@@ -512,16 +517,16 @@ jobs:
         run: |
           set -euo pipefail
           cd kernel_workspace
-      
+
           # Fetch patch repos
           [ -d "SukiSU_patch" ] || git clone https://github.com/ShirkNeko/SukiSU_patch.git
           # Branch contains patches/ksu_toolkit.patch
           [ -d "Action-Build" ] || git clone --depth=1 -b SukiSU-Ultra https://github.com/Numbersf/Action-Build.git
-      
+
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
             BR="gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}"
-      
+
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$BR" susfs4ksu
             cd susfs4ksu
             if [ -n "$SUSFS_META" ]; then
@@ -533,14 +538,14 @@ jobs:
             SUSFS_COMMIT_SHA="$(git rev-parse HEAD || true)"
             echo "SUSFS_COMMIT_SHA=$SUSFS_COMMIT_SHA" >> "$GITHUB_ENV"
             cd ..
-      
+
             cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           fi
-      
+
           cd ./common
-      
+
           echo "Applying ksu_toolkit.patch (Action-Build SukiSU-Ultra)..."
           if [ -f ../Action-Build/patches/ksu_toolkit.patch ]; then
             patch -p1 --forward < ../Action-Build/patches/ksu_toolkit.patch || \
@@ -548,19 +553,19 @@ jobs:
           else
             echo "WARN: ksu_toolkit.patch not found; skipping..."
           fi
-      
+
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             echo "Applying base SUSFS patch..."
             patch -p1 --forward < "50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch" || true
-      
+
             if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
               cp ../Action-Build/patches/No_5uS.patch ./
               patch -p1 --forward < No_5uS.patch || true
             fi
           else
             echo "SUSFS disabled (SUSFS_META=-1). Skipping SUSFS patches."
-          fi          
-            
+          fi
+
       - name: 🔍 Capture SUSFS Metadata
         if: ${{ github.event.inputs.SUSFS_META != '-1' }}
         shell: bash
@@ -662,7 +667,14 @@ jobs:
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$CONFIG_FILE"
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n" >> "$CONFIG_FILE"
           echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$CONFIG_FILE"
+          echo "CONFIG_CPU_IDLE_GOV_TEO=y" >> "$CONFIG_FILE"
+          echo "CONFIG_ENERGY_MODEL=y" >> "$CONFIG_FILE"
           echo "CONFIG_OPTIMIZE_INLINING=y" >> "$CONFIG_FILE"
+          echo "CONFIG_SCHED_AUTOGROUP=y" >> "$CONFIG_FILE"
+          echo "CONFIG_TCP_FASTOPEN=y" >> "$CONFIG_FILE"
+          echo "CONFIG_WIREGUARD=y" >> "$CONFIG_FILE"
+          echo "CONFIG_IOSCHED_BFQ=y" >> "$CONFIG_FILE"
+          echo "CONFIG_BFQ_GROUP_IOSCHED=y" >> "$CONFIG_FILE"
 
           echo "CONFIG_DEBUG_KERNEL=n" >> "$CONFIG_FILE"
           echo "CONFIG_DEBUG_INFO=n" >> "$CONFIG_FILE"
@@ -846,11 +858,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-      
+
           git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           mkdir -p kernel_workspace/out/Final-Image-Find/
-      
+
           image_path="$(find "./kernel_workspace/common/out/" -name "Image" 2>/dev/null | head -n 1 || true)"
           if [ -z "${image_path:-}" ]; then
             image_path="$(find "./kernel_workspace/out/" -name "Image" 2>/dev/null | head -n 1 || true)"
@@ -858,12 +870,12 @@ jobs:
           if [ -z "${image_path:-}" ]; then
             image_path="$(find "./kernel_workspace" -type f -path "*/dist/Image" 2>/dev/null | head -n 1 || true)"
           fi
-      
+
           if [ -z "${image_path:-}" ] || [ ! -f "$image_path" ]; then
             echo "Image file not found, build failed or output path differs" >&2
             exit 1
           fi
-      
+
           echo "Image found at: $image_path"
           cp "$image_path" ./AnyKernel3/Image
           cp "$image_path" kernel_workspace/out/Final-Image-Find/Image
@@ -895,13 +907,13 @@ jobs:
         run: |
           set -euo pipefail
           cd AnyKernel3
-      
+
           # Prevent zip-in-zip
           rm -f ./*.zip
-      
+
           ZIP_NAME="AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}.zip"
           zip -r9 "${ZIP_NAME}" . -x "*.git*" -x "*.zip"
-      
+
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
           ls -la "${ZIP_NAME}"
 
@@ -909,7 +921,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}
-          path: |            
+          path: |
             AnyKernel3/*.zip
 
       - name: 📊 Calculate Build Metrics
@@ -999,7 +1011,7 @@ jobs:
           if [ "${{ github.event.inputs.BUILD_NOCCACHE }}" = "true" ]; then CCACHE_STATUS="❌ Disabled"; else CCACHE_STATUS="✅ Enabled (8GB max)"; fi
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          # OnePlus 15 ReSukiSU Kernel Build Complete (AOSP)
+          # OnePlus 15 ReSukiSU Kernel Build Complete
 
           ## Device Information
           | Property | Value |
@@ -1007,7 +1019,7 @@ jobs:
           | **Device** | OnePlus 15 |
           | **Android Version** | ${KANDROID_VERSION} |
           | **Kernel Version** | ${TKERNEL_VERSION} |
-          | **AOSP Branch** | common-${{ github.event.inputs.FILE }} |
+          | **Branch** | common-${{ github.event.inputs.FILE }} |
 
           ## Build Configuration
           | Component | Version/Setting |
