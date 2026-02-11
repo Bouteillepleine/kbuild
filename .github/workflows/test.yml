@@ -905,13 +905,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd AnyKernel3
-
-          # Prevent zip-in-zip
-          rm -f ./*.zip
 
           ZIP_NAME="AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}.zip"
-          zip -r9 "${ZIP_NAME}" . -x "*.git*" -x "*.zip"
+
+          # Create zip from OUTSIDE the directory, output to workspace root
+          cd AnyKernel3
+          zip -r9 "${GITHUB_WORKSPACE}/${ZIP_NAME}" . -x "*.git*"
+          cd "${GITHUB_WORKSPACE}"
 
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
           ls -la "${ZIP_NAME}"
@@ -920,8 +920,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}
-          path: |
-            AnyKernel3/*.zip
+          path: ${{ github.workspace }}/${{ env.ZIP_NAME }}
+          compression-level: 0
 
       - name: 📊 Calculate Build Metrics
         id: metrics
