@@ -5,7 +5,7 @@ on:
     inputs:
       FILE:
         type: choice
-        description: "AOSP kernel branch suffix (used as common-${FILE})"
+        description: "Oneplus 15 kernel branch suffix (used as common-${FILE})"
         required: true
         default: android16-6.12-2025-06
         options:
@@ -270,7 +270,7 @@ jobs:
             exit 1
           fi
 
-      - name: Initialize Repo and Sync (AOSP kernel/manifest)
+      - name: Initialize Repo and Sync
         shell: bash
         run: |
           set -euxo pipefail
