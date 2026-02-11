@@ -793,6 +793,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+      
           git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           mkdir -p kernel_workspace/out/Final-Image-Find/
@@ -802,7 +803,7 @@ jobs:
             image_path="$(find "./kernel_workspace/out/" -name "Image" 2>/dev/null | head -n 1 || true)"
           fi
           if [ -z "${image_path:-}" ]; then
-            image_path="$(find "./kernel_workspace" -path "*/dist/Image" -type f 2>/dev/null | head -n 1 || true)"
+            image_path="$(find "./kernel_workspace" -type f -path "*/dist/Image" 2>/dev/null | head -n 1 || true)"
           fi
       
           if [ -z "${image_path:-}" ] || [ ! -f "$image_path" ]; then
@@ -834,15 +835,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "value=${{ github.event.inputs.KPM == 'KPM' && '_KPM' || '' }}${{ github.event.inputs.LSM == 'true' && '_LSM' || '' }}_${{ github.event.inputs.MANAGER_SOURCE }}" >> "$GITHUB_OUTPUT"
+          echo "value=${{ github.event.inputs.KPM == 'KPM' && '_KPM' || '' }}${{ github.event.inputs.LSM == 'true' && '_LSM' || '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Zip AnyKernel3
         shell: bash
         run: |
           set -euo pipefail
           cd AnyKernel3
+      
+          # Prevent zip-in-zip
+          rm -f ./*.zip
+      
           ZIP_NAME="AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}.zip"
-          zip -r9 "${ZIP_NAME}" ./* -x "*.git*"
+          zip -r9 "${ZIP_NAME}" . -x "*.git*" -x "*.zip"
+      
           echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
           ls -la "${ZIP_NAME}"
 
@@ -850,10 +856,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}
-          path: |
-            AnyKernel3/Image
+          path: |            
             AnyKernel3/*.zip
-
 
       - name: 📊 Calculate Build Metrics
         id: metrics
