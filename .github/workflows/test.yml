@@ -364,7 +364,6 @@ jobs:
             echo "::endgroup::"
           }
 
-          # Track which repos we touched
           touched_repos=()
 
           apply_suffix() {
@@ -385,8 +384,6 @@ jobs:
             fi
 
             chmod +x "$path"
-
-            # Record owning repo dir (first path component)
             touched_repos+=("${path%%/*}")
           }
 
@@ -394,7 +391,6 @@ jobs:
           apply_suffix "msm-kernel/scripts/setlocalversion"
           apply_suffix "external/dtc/scripts/setlocalversion"
 
-          # Commit only in repos that exist and were touched (unique)
           for repo_dir in $(printf "%s\n" "${touched_repos[@]}" | sort -u); do
             commit_if_git_repo "$repo_dir"
           done
@@ -517,9 +513,7 @@ jobs:
           set -euo pipefail
           cd kernel_workspace
 
-          # Fetch patch repos
           [ -d "SukiSU_patch" ] || git clone https://github.com/ShirkNeko/SukiSU_patch.git
-          # Branch contains patches/ksu_toolkit.patch
           [ -d "Action-Build" ] || git clone --depth=1 -b SukiSU-Ultra https://github.com/Numbersf/Action-Build.git
 
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
@@ -665,15 +659,10 @@ jobs:
 
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$CONFIG_FILE"
           echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n" >> "$CONFIG_FILE"
-          echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$CONFIG_FILE"
-          echo "CONFIG_CPU_IDLE_GOV_TEO=y" >> "$CONFIG_FILE"
-          echo "CONFIG_ENERGY_MODEL=y" >> "$CONFIG_FILE"
-          echo "CONFIG_OPTIMIZE_INLINING=y" >> "$CONFIG_FILE"
-          echo "CONFIG_SCHED_AUTOGROUP=y" >> "$CONFIG_FILE"
+          echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$CONFIG_FILE"          
+          echo "CONFIG_OPTIMIZE_INLINING=y" >> "$CONFIG_FILE"          
           echo "CONFIG_TCP_FASTOPEN=y" >> "$CONFIG_FILE"
-          echo "CONFIG_WIREGUARD=y" >> "$CONFIG_FILE"
-          echo "CONFIG_IOSCHED_BFQ=y" >> "$CONFIG_FILE"
-          echo "CONFIG_BFQ_GROUP_IOSCHED=y" >> "$CONFIG_FILE"
+          echo "CONFIG_WIREGUARD=y" >> "$CONFIG_FILE"          
 
           echo "CONFIG_DEBUG_KERNEL=n" >> "$CONFIG_FILE"
           echo "CONFIG_DEBUG_INFO=n" >> "$CONFIG_FILE"
@@ -785,40 +774,65 @@ jobs:
             echo "ERROR: Only ${AVAIL_GB}G free on workspace disk. Aborting to avoid runner crash."
             exit 1
           fi
-
-      - name: Enable ccache wrappers (clang/gcc)
+     
+      - name: Inject ccache into kernel toolchain
         if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' }}
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "CCACHE_DIR=${CCACHE_DIR}"
-          ccache --version || true
+          echo "::group::Setting up ccache for Kleaf/Bazel build"
 
-          if [ -d /usr/lib/ccache ]; then
-            # Apply immediately for this step...
-            export PATH="/usr/lib/ccache:$PATH"
-            # ...and persist for later steps
-            echo "PATH=/usr/lib/ccache:$PATH" >> "$GITHUB_ENV"
-            echo "Prepended /usr/lib/ccache to PATH (now + next steps)"
-          else
-            echo "WARN: /usr/lib/ccache not found; wrappers may not work."
+          cd kernel_workspace
+
+          # Find the actual clang binary used by the build system
+          CLANG_BIN=""
+          for candidate in \
+            prebuilts/clang/host/linux-x86/clang-*/bin/clang \
+            prebuilts/clang/host/linux-x86/*/bin/clang; do
+            if [ -x "$candidate" ]; then
+              CLANG_BIN="$(realpath "$candidate")"
+              break
+            fi
+          done
+
+          if [ -z "$CLANG_BIN" ]; then
+            echo "WARN: Could not find prebuilt clang — ccache injection skipped"
+            echo "CCACHE_INJECTED=false" >> "$GITHUB_ENV"
+            echo "::endgroup::"
+            exit 0
           fi
 
-          # Helps cache hits when paths differ between runs
+          CLANG_DIR="$(dirname "$CLANG_BIN")"
+          echo "Found clang at: $CLANG_BIN"
+          echo "Clang dir: $CLANG_DIR"
+
+          # Wrap clang and clang++ with ccache
+          for tool in clang clang++; do
+            REAL_PATH="${CLANG_DIR}/${tool}"
+            if [ -x "$REAL_PATH" ]; then
+              mv "$REAL_PATH" "${REAL_PATH}.real"
+              cat > "$REAL_PATH" <<'WRAPPER'
+          #!/bin/bash
+          exec ccache "${0}.real" "$@"
+          WRAPPER
+              chmod +x "$REAL_PATH"
+              echo "✅ Wrapped: ${tool} → ccache ${tool}.real"
+            fi
+          done
+
+          echo "CCACHE_INJECTED=true" >> "$GITHUB_ENV"
+          echo "CLANG_DIR=${CLANG_DIR}" >> "$GITHUB_ENV"
+
+          # ccache environment for Bazel sandbox
           echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}" >> "$GITHUB_ENV"
           echo "CCACHE_COMPRESS=true" >> "$GITHUB_ENV"
-          echo "CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime" >> "$GITHUB_ENV"
+          echo "CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,locale" >> "$GITHUB_ENV"
+
+          echo "::endgroup::"
 
           echo "::group::ccache stats (pre-build)"
           ccache -s || true
-          echo "::endgroup::"
-
-          echo "::group::Which compilers will be used?"
-          command -v ccache || true
-          command -v clang || true
-          command -v clang++ || true
-          clang --version || true
           echo "::endgroup::"
 
       - name: Build Kernel
@@ -840,7 +854,12 @@ jobs:
           if [ -f "build/build.sh" ]; then
             LTO=none BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
           else
-            tools/bazel build --config=fast --lto=none //common:kernel_aarch64_dist
+            # --sandbox_writable_path lets ccache write to its cache dir inside Bazel sandbox
+            BAZEL_ARGS="--config=fast --lto=none"
+            if [ "${CCACHE_INJECTED:-false}" = "true" ] && [ -n "${CCACHE_DIR:-}" ]; then
+              BAZEL_ARGS="${BAZEL_ARGS} --sandbox_writable_path=${CCACHE_DIR}"
+            fi
+            tools/bazel build ${BAZEL_ARGS} //common:kernel_aarch64_dist
           fi
           echo "::endgroup::"
 
@@ -852,6 +871,36 @@ jobs:
           rm -rf "$ROOT/common/out/"*/intermediates "$ROOT/out/"*/intermediates 2>/dev/null || true
           df -h / "$GITHUB_WORKSPACE"
           echo "::endgroup::"
+
+      - name: Restore original clang (post-build)
+        if: ${{ github.event.inputs.BUILD_NOCCACHE == 'false' && always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLANG_DIR="${CLANG_DIR:-}"
+          if [ -z "$CLANG_DIR" ]; then
+            echo "No CLANG_DIR set — scanning for wrapped binaries..."
+            cd kernel_workspace
+            for candidate in \
+              prebuilts/clang/host/linux-x86/clang-*/bin \
+              prebuilts/clang/host/linux-x86/*/bin; do
+              if [ -d "$candidate" ]; then
+                CLANG_DIR="$(realpath "$candidate")"
+                break
+              fi
+            done
+          fi
+
+          if [ -n "$CLANG_DIR" ]; then
+            for tool in clang clang++; do
+              if [ -f "${CLANG_DIR}/${tool}.real" ]; then
+                mv "${CLANG_DIR}/${tool}.real" "${CLANG_DIR}/${tool}"
+                echo "✅ Restored: ${CLANG_DIR}/${tool}"
+              fi
+            done
+          else
+            echo "WARN: Could not find clang dir to restore"
+          fi
 
       - name: Make AnyKernel3
         shell: bash
@@ -908,7 +957,7 @@ jobs:
 
           ZIP_NAME="AnyKernel3_${{ github.event.inputs.MANAGER_SOURCE }}_${{ env.KSUVER }}_OnePlus15_${{ env.TKERNEL_VERSION }}${{ steps.suffix.outputs.value }}.zip"
 
-          # Create zip from OUTSIDE the directory, output to workspace root
+          # Create zip from INSIDE the directory but output to workspace root
           cd AnyKernel3
           zip -r9 "${GITHUB_WORKSPACE}/${ZIP_NAME}" . -x "*.git*"
           cd "${GITHUB_WORKSPACE}"
@@ -949,13 +998,14 @@ jobs:
           done
           echo "WARNINGS_COUNT=${WARNINGS_COUNT}" >> "$GITHUB_ENV"
 
-          cd AnyKernel3
+          # ZIP is at workspace root now (not inside AnyKernel3/)
           ZIP_NAME="${ZIP_NAME:-AnyKernel3.zip}"
+          ZIP_SHA256=$(sha256sum "${GITHUB_WORKSPACE}/${ZIP_NAME}" | awk '{print $1}')
+          ZIP_SIZE=$(du -h "${GITHUB_WORKSPACE}/${ZIP_NAME}" | awk '{print $1}')
 
-          ZIP_SHA256=$(sha256sum "${ZIP_NAME}" | awk '{print $1}')
-          ZIP_SIZE=$(du -h "${ZIP_NAME}" | awk '{print $1}')
-          IMAGE_SHA256=$(sha256sum Image | awk '{print $1}')
-          IMAGE_SIZE=$(du -h Image | awk '{print $1}')
+          # Image is still inside AnyKernel3/
+          IMAGE_SHA256=$(sha256sum "${GITHUB_WORKSPACE}/AnyKernel3/Image" | awk '{print $1}')
+          IMAGE_SIZE=$(du -h "${GITHUB_WORKSPACE}/AnyKernel3/Image" | awk '{print $1}')
 
           echo "ZIP_SHA256=${ZIP_SHA256}" >> "$GITHUB_ENV"
           echo "ZIP_SIZE=${ZIP_SIZE}" >> "$GITHUB_ENV"
