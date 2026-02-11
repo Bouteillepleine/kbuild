@@ -554,9 +554,7 @@ jobs:
             # Apply SusFS fix patches from WildKernels (ONLY when SUSFS is enabled)
             SUSFS_FIX_VER="v2.0.0"
             FIX_DIR="${KERNEL_PATCHES_FOLDER}/next/susfs_fix_patches/${SUSFS_FIX_VER}"
-          
-            echo "Applying WildKernels SUSFS fix patches from: ${FIX_DIR}"
-            patch -p1 --forward < "${FIX_DIR}/overwrite_hook_mode.patch"
+                      
             echo "Patching KSU_TOOLKIT Support for SusFS kernel!"
             patch -p1 --forward < "${FIX_DIR}/ksu_toolkit.patch"
             echo "Patching Multi-manager Support for SusFS kernel!"
