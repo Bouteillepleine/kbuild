@@ -955,73 +955,85 @@ jobs:
       - name: Build Kernel (FAST)
         if: ${{ github.event.inputs.FAST_BUILD == 'true' }}
         id: fast_build
+        shell: bash
         run: |
+          set -euo pipefail
+      
           KERNEL_VERSION="${{ env.KERNEL_VERSION }}"
           cd kernel_workspace/kernel_platform
-
+      
+          # Detect LLVM_IAS
           if [[ -f ./common/build.config.arm ]] && grep -q '^LLVM_IAS=1' ./common/build.config.arm; then
             USE_LLVM_IAS=true
           else
             USE_LLVM_IAS=false
           fi
-
+      
+          # Read CLANG_PREBUILT_BIN
           CLANG_PREBUILT_BIN=""
           for f in ./common/build.config.common ./"${PATH_2:-}"/build.config.common; do
             [[ -f "$f" ]] || continue
             CLANG_PREBUILT_BIN=$(grep '^CLANG_PREBUILT_BIN=' "$f" | cut -d'=' -f2)
             [[ -n "$CLANG_PREBUILT_BIN" ]] && break
           done
-
+      
           if [[ -z "$CLANG_PREBUILT_BIN" ]]; then
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
+      
+          # Extract clang-r* if present, else fallback to build.config.constants
+          CLANG_VERSION=""
           if [[ "$CLANG_PREBUILT_BIN" =~ (clang-r[0-9a-z]+) ]]; then
             CLANG_VERSION="${BASH_REMATCH[1]}"
-          else
-            if [[ -f ./common/build.config.constants ]]; then
-              CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
-            fi
+          elif [[ -f ./common/build.config.constants ]]; then
+            CLANG_VERSION=$(grep '^CLANG_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
           fi
-
-          if [[ -z "${CLANG_VERSION:-}" ]]; then
+      
+          if [[ -z "$CLANG_VERSION" ]]; then
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
+      
           CLANG_PREBUILT_BIN=${CLANG_PREBUILT_BIN/\$\{CLANG_VERSION\}/$CLANG_VERSION}
-
+      
+          # Rust: enable ONLY for kernel 6.12
           RUSTC_VERSION=""
-          if [[ -f ./common/build.config.constants ]]; then
-            RUSTC_VERSION=$(grep '^RUSTC_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
+          ENABLE_RUST=false
+          if [[ "$KERNEL_VERSION" == "6.12" ]]; then
+            if [[ -f ./common/build.config.constants ]]; then
+              RUSTC_VERSION=$(grep '^RUSTC_VERSION=' ./common/build.config.constants | cut -d'=' -f2 || true)
+            fi
+            if [[ -n "$RUSTC_VERSION" ]]; then
+              ENABLE_RUST=true
+            fi
           fi
-
-          if [[ -n "$RUSTC_VERSION" ]]; then
-            echo "RUSTC_VERSION=$RUSTC_VERSION" >> $GITHUB_ENV
-            echo "ENABLE_RUST=true" >> $GITHUB_ENV
-          else
-            echo "ENABLE_RUST=false" >> $GITHUB_ENV
-          fi
-
+      
+          # Optional: persist for later steps (not used in this step's logic)
+          echo "RUSTC_VERSION=$RUSTC_VERSION" >> "$GITHUB_ENV"
+          echo "ENABLE_RUST=$ENABLE_RUST" >> "$GITHUB_ENV"
+      
+          # Source build env (don't depend on it for ENABLE_RUST)
           set +u
           source "$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/build/kernel/_setup_env.sh" 2>/dev/null || true
           set -u
-
+      
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$CLANG_PREBUILT_BIN:$PATH"
           export PATH="/usr/lib/ccache:$PATH"
-
-          if [[ "${ENABLE_RUST}" == "true" ]]; then
+      
+          if [[ "$ENABLE_RUST" == "true" ]]; then
             export BINDGEN="bindgen"
             export LIBCLANG_PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/$(dirname "$CLANG_PREBUILT_BIN")/lib"
           fi
-
+      
           cd ./common
-
+          OUT=out
+      
+          # Remap paths for reproducibility
           MAP="-fdebug-prefix-map=${GITHUB_WORKSPACE}=."
           MPMAP="-fmacro-prefix-map=${GITHUB_WORKSPACE}=."
           FPMAP="-ffile-prefix-map=${GITHUB_WORKSPACE}=."
-
+      
           MAKE_ARGS=(
             LLVM=1
             ARCH=arm64
@@ -1035,29 +1047,35 @@ jobs:
             KCFLAGS+=-Wno-error
             KCFLAGS+=-D__ANDROID_COMMON_KERNEL__
           )
-
+      
           if [[ "$USE_LLVM_IAS" == "true" ]]; then
             MAKE_ARGS=(LLVM_IAS=1 "${MAKE_ARGS[@]}")
           fi
-
-          if [[ "${ENABLE_RUST}" == "true" ]]; then
+      
+          if [[ "$ENABLE_RUST" == "true" ]]; then
             MAKE_ARGS=(RUSTC=../../prebuilts/rust/linux-x86/$RUSTC_VERSION/bin/rustc "${MAKE_ARGS[@]}")
           fi
-
-          make O=out "${MAKE_ARGS[@]}" gki_defconfig
-
-          scripts/config --file out/.config -e LTO_CLANG
-          scripts/config --file out/.config -e LTO_CLANG_THIN
-          scripts/config --file out/.config -d LTO_CLANG_NONE
-          scripts/config --file out/.config -d LTO_CLANG_FULL
-          
+      
+          make O="$OUT" "${MAKE_ARGS[@]}" gki_defconfig
+      
+          # LTO policy:
+          # - 6.12 => none
+          # - others => thin
           if [[ "$KERNEL_VERSION" == "6.12" ]]; then
-            scripts/config --file out/.config -e LTO_CLANG
-            scripts/config --file out/.config -e LTO_CLANG_NONE
-            scripts/config --file out/.config -d LTO_CLANG_THIN
-            scripts/config --file out/.config -d LTO_CLANG_FULL
+            echo ">> LTO = none (6.12)"
+            scripts/config --file "$OUT/.config" -e LTO_CLANG
+            scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_THIN
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_FULL
+          else
+            echo ">> LTO = thin (non-6.12)"
+            scripts/config --file "$OUT/.config" -e LTO_CLANG
+            scripts/config --file "$OUT/.config" -e LTO_CLANG_THIN
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_NONE
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_FULL
           fi
-
+      
+          # Disable KUnit tests (optional)
           disable_list=(
             CONFIG_REGMAP_KUNIT
             CONFIG_INPUT_KUNIT_TEST
@@ -1071,13 +1089,13 @@ jobs:
             CONFIG_EXT4_KUNIT_TESTS
             CONFIG_FAT_KUNIT_TEST
           )
-          
+      
           for sym in "${disable_list[@]}"; do
             scripts/config --file "$OUT/.config" -d "$sym" 2>/dev/null || true
           done
-
-          make O=out "${MAKE_ARGS[@]}" olddefconfig
-          make -j"$(nproc --all)" O=out "${MAKE_ARGS[@]}"
+      
+          make O="$OUT" "${MAKE_ARGS[@]}" olddefconfig
+          make -j"$(nproc --all)" O="$OUT" "${MAKE_ARGS[@]}"
           ccache -s
 
       - name: Build Kernel (Fallback)
