@@ -664,12 +664,15 @@ jobs:
           FILE: ${{ github.event.inputs.FILE }}
         run: |
           cd kernel_workspace
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git \
+              -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
             cd susfs4ksu
-            [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "SUSFS_META 为空，使用最新上游 SUSFS"
-            # 获取 SUSFS commit hash 并导出到环境变量
+            [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "SUSFS_META is empty, using latest upstream SUSFS"
+      
+            # Get SUSFS commit hash and export to env
             SUSFS_COMMIT_HASH=$(git rev-parse --short=8 HEAD)
             echo "SUSFS_COMMIT_HASH=$SUSFS_COMMIT_HASH" >> $GITHUB_ENV
             echo "SUSFS commit hash: $SUSFS_COMMIT_HASH"
@@ -677,76 +680,127 @@ jobs:
           else
             echo "SUSFS_COMMIT_HASH=disabled" >> $GITHUB_ENV
           fi
+      
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           git clone https://github.com/Numbersf/Action-Build.git
+      
           cd kernel_platform
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            echo "正在拉取susfs补丁"
-            cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
+            echo "Pulling SUSFS patches..."
+      
+            # --- Robust SUSFS patch selection (auto-find instead of hardcoded name) ---
+            PATCH_BASE="../susfs4ksu/kernel_patches"
+            TARGET_COMMON="./common"
+            GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
+      
+            echo "Looking for SUSFS patch for: $GKI_V"
+            PATCH_FILE="$(find "$PATCH_BASE" -type f \
+              \( -name "50_add_susfs_in_gki-${GKI_V}.patch" -o -name "50_add_susfs_in_gki-${GKI_V}*.patch" \) \
+              | head -n 1)"
+      
+            if [[ -z "$PATCH_FILE" ]]; then
+              echo "❌ SUSFS patch not found for ${GKI_V} under ${PATCH_BASE}"
+              echo "Available patch files (first 200):"
+              find "$PATCH_BASE" -maxdepth 3 -type f -name '*.patch' | sed -n '1,200p'
+              exit 1
+            fi
+      
+            echo "✅ Using SUSFS patch: $PATCH_FILE"
+            cp "$PATCH_FILE" "${TARGET_COMMON}/"
+      
+            # Keep copying fs/ and include/ like before
             cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           fi
+      
           if [[ "${{ github.event.inputs.ZRAM }}" == 1* ]]; then
-            echo "正在拉取zram补丁"
+            echo "Pulling ZRAM patches..."
             cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./common/include/linux/
             cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./common/lib/
             cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./common/crypto/
             cp -r ../SukiSU_patch/other/zram/lz4k_oplus ./common/lib/
           fi
+      
           cd ./common
           GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
           SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
+      
           if [ "$GKI_V" == "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
-            echo "修复内核版本为5.15.0~5.15.123仅支持旧版C库造成的一些bug"
+            echo "Fixing bugs caused by 5.15.0~5.15.123 only supporting an older C library"
             cp ../../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
             patch -p1 < fix_5.15.legacy.patch
-            echo "fix_5.15_patch完成"
+            echo "fix_5.15_patch done"
           fi
+      
           if [[ "${{ env.KV2 }}" == "66" && "${{ env.KV3 }}" -le 6630 && "${{ github.event.inputs.SUSFS_META }}" != "-1" ]]; then
             TRUSTY_EXISTS="false"
             if grep -q 'common-modules/trusty' "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml"; then
               TRUSTY_EXISTS="true"
             fi
             echo "trusty_exists=$TRUSTY_EXISTS" >> $GITHUB_OUTPUT
+      
             if [[ "$TRUSTY_EXISTS" == "false" ]]; then
-              echo "修复内核版本为6.6.0~6.6.30的机型源码及清单中缺失TrustyOS导致的susfs报错"
-              sed -i 's/-32,12 +32,38/-32,11 +32,37/g' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
-              sed -i '/#include <trace\/hooks\/fs.h>/d' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
+              echo "Fixing SUSFS errors for 6.6.0~6.6.30 devices missing TrustyOS in source/manifest"
+              # The patch file name may vary; apply the edits to whichever patch we copied
+              PATCH_IN_COMMON="$(ls -1 ./50_add_susfs_in_gki-${GKI_V}*.patch 2>/dev/null | head -n 1 || true)"
+              if [[ -n "$PATCH_IN_COMMON" ]]; then
+                sed -i 's/-32,12 +32,38/-32,11 +32,37/g' "$PATCH_IN_COMMON"
+                sed -i '/#include <trace\/hooks\/fs.h>/d' "$PATCH_IN_COMMON"
+              else
+                echo "⚠️ Could not locate copied SUSFS patch in ./common to adjust for TrustyOS; skipping edits"
+              fi
             fi
           fi
+      
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             # Fake Patch to fix failures
             fake_patched=0
+      
             if [ "$GKI_V" = "android15-6.6" ]; then
               if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                echo "未找到 nr_subpages，正在进行补丁修复"
-                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+                echo "nr_subpages not found, applying temporary fix"
+                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' \
+                       -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
                 fake_patched=1
               fi
             fi
+      
             if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
               if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-                echo "未找到 vma_pages，正在进行补丁修复"
+                echo "vma_pages not found, applying temporary fix"
                 fake_patched=1
               fi
             fi
-            echo "正在打susfs补丁"
-            patch -p1 < 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-            echo "susfs_patch完成"
-            # Revert
+      
+            echo "Applying SUSFS patch..."
+            PATCH_IN_COMMON="$(ls -1 ./50_add_susfs_in_gki-${GKI_V}*.patch 2>/dev/null | head -n 1 || true)"
+            if [[ -z "$PATCH_IN_COMMON" ]]; then
+              echo "❌ SUSFS patch file not present in ./common after copy"
+              ls -la
+              exit 1
+            fi
+      
+            patch -p1 < "$PATCH_IN_COMMON" || true
+            echo "susfs_patch done"
+      
+            # Revert temporary edits
             if [ "$fake_patched" = 1 ]; then
               if [ "$GKI_V" = "android15-6.6" ]; then
                 if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                  sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+                  sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' \
+                         -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
                 fi
               fi
+      
               if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
                 if grep -qxF $'\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
                   sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
                 fi
               fi
             fi
-            if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ] && [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
+      
+            if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
               cp ../../Action-Build/patches/No_5uS.patch ./
               patch -p1 < No_5uS.patch || true
             fi
