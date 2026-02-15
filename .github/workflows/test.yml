@@ -56,12 +56,9 @@ on:
         type: choice
         description: "管理器调用方向"
         required: true
-        default: OFFICIAL
+        default: MD3
         options:
-          - OFFICIAL
-          - SPOOF
-          - NEW
-          - NEW-SPOOF
+          - MD3          
       SUSFS_CI:
         type: choice
         description: "SUSFS模块下载调用方向"
@@ -569,128 +566,99 @@ jobs:
         id: manager
         run: |
           MANAGER_SOURCE="${{ github.event.inputs.MANAGER_SOURCE }}"
-
           case "$MANAGER_SOURCE" in
-            NEW-SPOOF)
-              BRANCH="new-manager"
-              ARTIFACT="Spoofed-Manager-release"
-              ;;
-            NEW)
-              BRANCH="new-manager"
-              ARTIFACT="Manager-release"
-              ;;
-            SPOOF)
+            MD3_SPOOF)
               BRANCH="main"
               ARTIFACT="Spoofed-Manager-release"
               ;;
-            OFFICIAL|*)
+            MD3|*)
               BRANCH="main"
               ARTIFACT="Manager-release"
               ;;
           esac
-
           echo "manager_branch=$BRANCH" >> "$GITHUB_OUTPUT"
           echo "manager_artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
-
+          
       - name: Add ReSukiSU
-        shell: bash
         run: |
-          set -euo pipefail
           cd kernel_workspace/kernel_platform
-
           MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
           KSU_META="${{ github.event.inputs.KSU_META }}"
-
           # 必须包含两个分隔符（至少三个字段）
           if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 2 ]]; then
-            echo "错误: KSU_META 参数缺少必要的分隔符 '/'，格式应为: 分支名/自定义标识(可省略)/提交hash(可省略)"
-            exit 10
+              echo "错误: KSU_META 参数缺少必要的分隔符 '/'，格式应为: 分支名/自定义标识(可省略)/提交hash(可省略)"
+              exit 10
           fi
-
           # 解析字段：分支 / 自定义标识 / 手动 hash
-          IFS='/' read -r BRANCH_NAME CUSTOM_TAG MANUAL_HASH <<< "$KSU_META"
-
+          IFS='/' read -r BRANCH_NAME KSU_CUSTOM_TAG MANUAL_HASH <<< "$KSU_META"
           echo "分支名: $BRANCH_NAME"
-          [[ -n "$CUSTOM_TAG" ]] && echo "自定义版本标识: $CUSTOM_TAG" || echo "自定义版本标识: 未启用"
+          [[ -n "$KSU_CUSTOM_TAG" ]] && echo "自定义版本标识: $KSU_CUSTOM_TAG" || echo "自定义版本标识: 未启用"
           [[ -n "$MANUAL_HASH" ]] && echo "手动指定 hash: $MANUAL_HASH" || echo "手动指定 hash: 未启用"
-
           curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/${MANAGER_BRANCH}/kernel/setup.sh" | bash -s "$BRANCH_NAME"
           cd ./KernelSU
-
-          # 如果指定了手动 hash，就切换到该提交
-          SHORT_HASH=""
+          if [[ -n "$KSU_CUSTOM_TAG" ]]; then
+            echo "KSU_CUSTOM_TAG=$KSU_CUSTOM_TAG" >> "$GITHUB_ENV"
+          fi
           if [[ -n "$MANUAL_HASH" ]]; then
             git fetch origin "$BRANCH_NAME" --depth=50
             git checkout "$MANUAL_HASH"
-            SHORT_HASH="${MANUAL_HASH:0:8}"
           fi
-
-          # 获取 API 版本（兜底 3.1.7）
-          KSU_API_VERSION="$(
-            curl -fsSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$BRANCH_NAME/kernel/Kbuild" \
-              | grep -m1 "KSU_VERSION_API :=" \
-              | awk -F'= ' '{print $2}' \
-              | tr -d '[:space:]' \
-              || true
-          )"
-          if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
-            KSU_API_VERSION="3.1.7"
-          fi
-          echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
-
-          GIT_HASH="$(git rev-parse --short HEAD)"
-          echo "GIT_HASH=$GIT_HASH"
-
-          # 组装版本号
-          USE_HASH="$GIT_HASH"
-          [[ -n "$SHORT_HASH" ]] && USE_HASH="$SHORT_HASH"
-
-          if [[ -z "$CUSTOM_TAG" ]]; then
-            VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$BRANCH_NAME"
+          GITHUB_API_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          api_count() {
+            OWNER="$1"; REPO="$2"; BR="$3"
+            URL="https://api.github.com/repos/${OWNER}/${REPO}/commits?sha=${BR}&per_page=1"
+            if [ -n "$GITHUB_API_TOKEN" ]; then
+              LINK=$(curl -sI -H "Authorization: token $GITHUB_API_TOKEN" -H "Accept: application/vnd.github+json" "$URL" | tr -d '\r' | sed -n 's/Link: //Ip' || true)
+            else
+              LINK=$(curl -sI -H "Accept: application/vnd.github+json" "$URL" | tr -d '\r' | sed -n 's/Link: //Ip' || true)
+            fi
+            if [ -n "$LINK" ]; then
+              LAST=$(echo "$LINK" | sed -n 's/.*<[^>]*page=\([0-9]*\)[^>]*>; rel="last".*/\1/p')
+              if [ -n "$LAST" ]; then
+                echo "$LAST"
+                return 0
+              fi
+            fi
+            if [ -n "$GITHUB_API_TOKEN" ]; then
+              BODY=$(curl -s -H "Authorization: token $GITHUB_API_TOKEN" -H "Accept: application/vnd.github+json" "$URL" || true)
+            else
+              BODY=$(curl -s -H "Accept: application/vnd.github+json" "$URL" || true)
+            fi
+            if [ -n "$BODY" ] && [ "$BODY" != "[]" ]; then
+              echo 1
+              return 0
+            fi
+            return 1
+          }
+          API_OWNER="ReSukiSU"
+          API_REPO="ReSukiSU"
+          COUNT_API=""
+          COUNT_API=$(api_count "$API_OWNER" "$API_REPO" "$MANAGER_BRANCH" || true)
+          if [ -n "$COUNT_API" ]; then
+            COUNT="$COUNT_API"
           else
-            VERSION_FULL="v$KSU_API_VERSION-$CUSTOM_TAG@$BRANCH_NAME[$USE_HASH]"
+            if ! git show-ref --verify --quiet "refs/heads/$MANAGER_BRANCH"; then
+              git fetch origin "$MANAGER_BRANCH" --depth=1 || true
+            fi
+            COUNT=$(git rev-list --count "origin/$MANAGER_BRANCH" 2>/dev/null || git rev-list --count "$MANAGER_BRANCH" 2>/dev/null || echo 13000)
           fi
-
-          # 清理并写入 Kbuild 版本信息
-          sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild || true
-          sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild || true
-          sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild || true
-
-          VERSION_DEFINITIONS="$(cat <<EOF
-            define get_ksu_version_full
-            $VERSION_FULL
-          endef          
-          KSU_VERSION_API := $KSU_API_VERSION
-          KSU_VERSION_FULL := $VERSION_FULL
-          EOF
-          )"
-
-          awk -v def="$VERSION_DEFINITIONS" '
-            /REPO_OWNER :=/ {print; print def; inserted=1; next}
-            {print}
-            END {if (!inserted) print "\n" def}
-          ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
-
+          ROOT_COUNT_API=""
+          ROOT_COUNT_API=$(api_count "$API_OWNER" "$API_REPO" "main" || true)
+          if [ -n "$ROOT_COUNT_API" ]; then
+            ROOT_COMMIT_COUNT="$ROOT_COUNT_API"
+          else
+            if ! git show-ref --verify --quiet "refs/heads/main"; then
+              git fetch origin main --depth=1 || true
+            fi
+            ROOT_COMMIT_COUNT=$(git rev-list --count "origin/main" 2>/dev/null || git rev-list --count "main" 2>/dev/null || echo "")
+          fi
+          echo "ROOT_COMMIT_COUNT=${ROOT_COMMIT_COUNT}" >> $GITHUB_ENV
           KSU_VERSION=$(expr $(git rev-list --count "$MANAGER_BRANCH" 2>/dev/null || echo 13000) + 30700)
-          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
-
-          echo "::group::最终 Kbuild 中版本信息及部分调试结果预览"
-          if grep -q "KSU_VERSION_FULL" kernel/Kbuild; then
-            grep -n "KSU_VERSION_FULL" kernel/Kbuild || true
-          else
-            echo "⚠️ kernel/Kbuild 未找到 KSU_VERSION_FULL（不致命，仅提示）"
-          fi
-
-          if grep -q "REPO_OWNER" kernel/Kbuild; then
-            grep -n "REPO_OWNER" kernel/Kbuild | head -n 20 || true
-          else
-            echo "⚠️ kernel/Kbuild 未找到 REPO_OWNER（不致命，仅提示）"
-          fi
-
-          echo "---- head kernel/Kbuild ----"
-          head -n 60 kernel/Kbuild || true
-          echo "::endgroup::"
-
+          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          # 导出 KSU 相关的提交哈希以供后续步骤使用
+          echo "KSU_GIT_HASH=$GIT_HASH" >> $GITHUB_ENV
+          echo "KSU_USE_HASH=$USE_HASH" >> $GITHUB_ENV
+          
       - name: Apply Patches ReSukiSU
         env:
           FILE: ${{ github.event.inputs.FILE }}
@@ -701,7 +669,13 @@ jobs:
             git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
             cd susfs4ksu
             [ -n "$SUSFS_META" ] && git checkout "$SUSFS_META" || echo "SUSFS_META 为空，使用最新上游 SUSFS"
+            # 获取 SUSFS commit hash 并导出到环境变量
+            SUSFS_COMMIT_HASH=$(git rev-parse --short=8 HEAD)
+            echo "SUSFS_COMMIT_HASH=$SUSFS_COMMIT_HASH" >> $GITHUB_ENV
+            echo "SUSFS commit hash: $SUSFS_COMMIT_HASH"
             cd ..
+          else
+            echo "SUSFS_COMMIT_HASH=disabled" >> $GITHUB_ENV
           fi
           git clone https://github.com/ShirkNeko/SukiSU_patch.git
           git clone https://github.com/Numbersf/Action-Build.git
@@ -712,26 +686,22 @@ jobs:
             cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           fi
-
-          if [ "${{ github.event.inputs.ZRAM }}" = "true" ]; then
+          if [[ "${{ github.event.inputs.ZRAM }}" == 1* ]]; then
             echo "正在拉取zram补丁"
             cp -r ../SukiSU_patch/other/zram/lz4k/include/linux/* ./common/include/linux/
             cp -r ../SukiSU_patch/other/zram/lz4k/lib/* ./common/lib/
             cp -r ../SukiSU_patch/other/zram/lz4k/crypto/* ./common/crypto/
             cp -r ../SukiSU_patch/other/zram/lz4k_oplus ./common/lib/
           fi
-
           cd ./common
           GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
           SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
-
           if [ "$GKI_V" == "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
             echo "修复内核版本为5.15.0~5.15.123仅支持旧版C库造成的一些bug"
             cp ../../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
             patch -p1 < fix_5.15.legacy.patch
             echo "fix_5.15_patch完成"
           fi
-
           if [[ "${{ env.KV2 }}" == "66" && "${{ env.KV3 }}" -le 6630 && "${{ github.event.inputs.SUSFS_META }}" != "-1" ]]; then
             TRUSTY_EXISTS="false"
             if grep -q 'common-modules/trusty' "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml"; then
@@ -744,7 +714,6 @@ jobs:
               sed -i '/#include <trace\/hooks\/fs.h>/d' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
             fi
           fi
-
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             # Fake Patch to fix failures
             fake_patched=0
@@ -761,11 +730,9 @@ jobs:
                 fake_patched=1
               fi
             fi
-
             echo "正在打susfs补丁"
             patch -p1 < 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             echo "susfs_patch完成"
-
             # Revert
             if [ "$fake_patched" = 1 ]; then
               if [ "$GKI_V" = "android15-6.6" ]; then
@@ -783,7 +750,7 @@ jobs:
               cp ../../Action-Build/patches/No_5uS.patch ./
               patch -p1 < No_5uS.patch || true
             fi
-          fi     
+          fi
 
       - name: Apply UNICODE_BYPASS
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
