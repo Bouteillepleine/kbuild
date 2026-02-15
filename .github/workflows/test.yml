@@ -4,7 +4,7 @@ on:
     inputs:
       FILE:
         type: choice
-        description: "配置文件"
+        description: "Configuration file"
         required: true
         default: oneplus_13r_b
         options:
@@ -54,14 +54,14 @@ on:
           - oneplus_15
       MANAGER_SOURCE:
         type: choice
-        description: "管理器调用方向"
+        description: "Manager source selection"
         required: true
         default: MD3
         options:
-          - MD3          
+          - MD3
       SUSFS_CI:
         type: choice
-        description: "SUSFS模块下载调用方向"
+        description: "SUSFS module download source"
         required: true
         default: NoN
         options:
@@ -70,7 +70,7 @@ on:
           - NoN
       KPM:
         type: choice
-        description: "内核模块实现方式"
+        description: "Kernel module implementation method"
         required: true
         default: KPM
         options:
@@ -79,86 +79,86 @@ on:
           - NoN
       SUSFS_META:
         type: string
-        description: "回退SUSFS到指定哈希版本"
+        description: "Roll back SUSFS to a specific hash version"
         required: false
         default: "f55d86eb9780844bc5ab2d6314b2d3654a07ca74"
       DYNAMIC_REPO:
         type: string
-        description: "动态清单仓库所有者"
+        description: "Owner of the dynamic manifest repository"
         required: true
         default: "Numbersf"
       BUILD_TIME:
         type: string
-        description: "自定义构建时间(输入F使用当前UTC时间)"
+        description: "Custom build time (enter F to use current UTC time)"
         required: false
         default: "Sun Feb 15 15:16:17 UTC 2026"
       KSU_META:
         type: string
-        description: "分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改)"
+        description: "Branch name (required) / custom version tag (leave empty to keep) / rollback to a specific commit hash (leave empty to keep)"
         required: false
         default: "main/⚡Ultra⚡/"
       SUFFIX:
         type: string
-        description: "自定义内核后缀(不输入使用随机字符串)"
-        required: false
-        default: ""
-      SUBLEVEL:
-        description: "自定义内核等级欺骗(SUBLEVEL)"
+        description: "Custom kernel suffix (leave empty to use a random string)"
         required: false
         default: "11-o-g64180ab070e"
+      SUBLEVEL:
+        description: "Custom kernel level spoofing (SUBLEVEL)"
+        required: false
+        default: ""
       FAST_BUILD:
         type: boolean
-        description: "是否启用极速构建？"
+        description: "Enable fast build?"
         required: true
         default: true
       LSM:
         type: boolean
-        description: "是否启用关键分区写入保护模块(BBG)？"
+        description: "Enable critical partition write protection module (BBG)?"
         required: true
         default: true
       NETFILTER:
         type: boolean
-        description: "是否启用网络功能拓展(NETFILTER)？"
+        description: "Enable network feature extensions (NETFILTER)?"
         required: true
         default: true
       BBR_ECN:
         type: boolean
-        description: "是否启用网络优化算法(BBR+ECN)？"
+        description: "Enable network optimization algorithm (BBR+ECN)?"
         required: true
         default: true
       UNICODE_BYPASS:
         type: boolean
-        description: "是否添加Unicode不可见字码点绕过读取漏洞修复？"
+        description: "Add Unicode invisible code-point bypass for a read vulnerability fix?"
         required: true
         default: false
       SCHED:
         type: boolean
-        description: "是否添加风驰驱动1.0？"
+        description: "Add Fengchi driver 1.0?"
         required: true
         default: false
       ZRAM:
         type: boolean
-        description: "是否添加更多ZRAM算法？"
+        description: "Add more ZRAM algorithms?"
         required: true
         default: false
       XUS_FIX:
         type: boolean
-        description: "是否阻止5US报错文件产生？"
+        description: "Prevent generation of 5US error files?"
         required: true
         default: false
       SUSFS_DEV:
         type: boolean
-        description: "是否拉取SUSFS-DEV分支？"
+        description: "Pull the SUSFS-DEV branch?"
         required: true
         default: false
       SPACE_NOCLEAN:
         type: boolean
-        description: "是否停用空间清扫？"
+        description: "Disable disk space cleanup?"
         required: true
         default: false
       BUILD_NOCCACHE:
         type: boolean
-        description: "是否停用此次Ccache？"
+        description: "Disable ccache for this build?"
         required: true
         default: false
 
