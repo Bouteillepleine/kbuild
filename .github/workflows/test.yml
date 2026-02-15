@@ -593,8 +593,11 @@ jobs:
           echo "manager_artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
 
       - name: Add ReSukiSU
+        shell: bash
         run: |
+          set -euo pipefail
           cd kernel_workspace/kernel_platform
+
           MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
           KSU_META="${{ github.event.inputs.KSU_META }}"
 
@@ -615,28 +618,33 @@ jobs:
           cd ./KernelSU
 
           # 如果指定了手动 hash，就切换到该提交
+          SHORT_HASH=""
           if [[ -n "$MANUAL_HASH" ]]; then
             git fetch origin "$BRANCH_NAME" --depth=50
             git checkout "$MANUAL_HASH"
-            SHORT_HASH=${MANUAL_HASH:0:8}
+            SHORT_HASH="${MANUAL_HASH:0:8}"
           fi
 
-          KSU_API_VERSION=$(curl -fsSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$BRANCH_NAME/kernel/Kbuild" | \
-            grep -m1 "KSU_VERSION_API :=" | awk -F'= ' '{print $2}' | tr -d '[:space:]')
+          # 获取 API 版本（兜底 3.1.7）
+          KSU_API_VERSION="$(
+            curl -fsSL "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/$BRANCH_NAME/kernel/Kbuild" \
+              | grep -m1 "KSU_VERSION_API :=" \
+              | awk -F'= ' '{print $2}' \
+              | tr -d '[:space:]' \
+              || true
+          )"
           if [[ -z "$KSU_API_VERSION" || "$(printf '%s\n' "$KSU_API_VERSION" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
             KSU_API_VERSION="3.1.7"
           fi
-          echo "KSU_API_VERSION=$KSU_API_VERSION" >> $GITHUB_ENV
+          echo "KSU_API_VERSION=$KSU_API_VERSION" >> "$GITHUB_ENV"
 
-          GIT_HASH=$(git rev-parse --short HEAD)
+          GIT_HASH="$(git rev-parse --short HEAD)"
           echo "GIT_HASH=$GIT_HASH"
 
           # 组装版本号
-          if [[ -n "$MANUAL_HASH" ]]; then
-            USE_HASH="$SHORT_HASH"
-          else
-            USE_HASH="$GIT_HASH"
-          fi
+          USE_HASH="$GIT_HASH"
+          [[ -n "$SHORT_HASH" ]] && USE_HASH="$SHORT_HASH"
+
           if [[ -z "$CUSTOM_TAG" ]]; then
             VERSION_FULL="v$KSU_API_VERSION-$USE_HASH@$BRANCH_NAME"
           else
@@ -644,32 +652,43 @@ jobs:
           fi
 
           # 清理并写入 Kbuild 版本信息
-          sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild
-          sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild
-          sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild
+          sed -i '/define get_ksu_version_full/,/endef/d' kernel/Kbuild || true
+          sed -i '/KSU_VERSION_API :=/d' kernel/Kbuild || true
+          sed -i '/KSU_VERSION_FULL :=/d' kernel/Kbuild || true
 
-          VERSION_DEFINITIONS=$(cat <<EOF
+          VERSION_DEFINITIONS="$(cat <<EOF
             define get_ksu_version_full
             $VERSION_FULL
-            endef
-
-            KSU_VERSION_API := $KSU_API_VERSION
-            KSU_VERSION_FULL := $VERSION_FULL
+          endef          
+          KSU_VERSION_API := $KSU_API_VERSION
+          KSU_VERSION_FULL := $VERSION_FULL
           EOF
-          )
+          )"
 
           awk -v def="$VERSION_DEFINITIONS" '
             /REPO_OWNER :=/ {print; print def; inserted=1; next}
-            1
-            END {if (!inserted) print def}
+            {print}
+            END {if (!inserted) print "\n" def}
           ' kernel/Kbuild > kernel/Kbuild.tmp && mv kernel/Kbuild.tmp kernel/Kbuild
 
           KSU_VERSION=$(expr $(git rev-list --count "$MANAGER_BRANCH" 2>/dev/null || echo 13000) + 30700)
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
 
           echo "::group::最终 Kbuild 中版本信息及部分调试结果预览"
-          grep -A10 "REPO_OWNER" kernel/Kbuild
-          grep "KSU_VERSION_FULL" kernel/Kbuild
+          if grep -q "KSU_VERSION_FULL" kernel/Kbuild; then
+            grep -n "KSU_VERSION_FULL" kernel/Kbuild || true
+          else
+            echo "⚠️ kernel/Kbuild 未找到 KSU_VERSION_FULL（不致命，仅提示）"
+          fi
+
+          if grep -q "REPO_OWNER" kernel/Kbuild; then
+            grep -n "REPO_OWNER" kernel/Kbuild | head -n 20 || true
+          else
+            echo "⚠️ kernel/Kbuild 未找到 REPO_OWNER（不致命，仅提示）"
+          fi
+
+          echo "---- head kernel/Kbuild ----"
+          head -n 60 kernel/Kbuild || true
           echo "::endgroup::"
 
       - name: Apply Patches ReSukiSU
@@ -764,24 +783,7 @@ jobs:
               cp ../../Action-Build/patches/No_5uS.patch ./
               patch -p1 < No_5uS.patch || true
             fi
-          fi
-
-      # OGKI转换GKI，无需修改 dtbo 开机
-      - name: Apply Convert HMBIRD_OGKI to HMBIRD_GKI
-        if: ${{ fromJSON(env.KV1) >= 6 && fromJSON(env.KV2) >= 66 && github.event.inputs.SCHED == 'false' }}
-        run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches"
-          cd kernel_workspace/kernel_platform/common
-          for p in ./kernel/sched/hmbird* ./vendor/oplus/kernel/cpu/sched_ext/hmbird*; do
-            [ -d "$p" ] && {
-              echo "源码中风驰代码已经存在，启用二次回退"
-              exit 0
-            }
-          done
-          sed -i '1iobj-y += hmbird_patch.o' drivers/Makefile
-          echo "正在打OGKI转换GKI补丁"
-          patch -p1 -F 3 < "${PATCH_DIR}/hmbird_patch.patch" || true
-          echo "OGKI转换GKI_patch完成"
+          fi     
 
       - name: Apply UNICODE_BYPASS
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
@@ -793,38 +795,7 @@ jobs:
           else
             patch -p1 --forward < "${PATCH_DIR}/unicode_bypass_fix_6.1+.patch" || true
           fi
-
-      - name: Apply ZRAM
-        if: ${{ github.event.inputs.ZRAM == 'true' }}
-        run: |
-          PATCH_DIR="${GITHUB_WORKSPACE}/kernel_workspace/SukiSU_patch/other/zram/zram_patch/${{ env.KERNEL_VERSION }}"
-          cd kernel_workspace/kernel_platform/common
-          echo "正在打lz4kd补丁"
-          patch -p1 -F 3 < "${PATCH_DIR}/lz4kd.patch" || true
-          echo 'lz4kd_patch完成'
-          echo "正在打lz4k_oplus补丁"
-          patch -p1 -F 3 < "${PATCH_DIR}/lz4k_oplus.patch" || true
-          echo 'lz4k_oplus_patch完成'
-
-      - name: Apply SCHED
-        env:
-          FILE: ${{ github.event.inputs.FILE }}
-        if: ${{ github.event.inputs.SCHED == 'true' }}
-        run: |
-          cd kernel_workspace/kernel_platform/common
-          git clone https://github.com/Numbersf/SCHED_PATCH.git -b $CPU || { echo "❌ CPU 分支不存在，风驰内核暂未支持你的机型，请关闭后重试"; exit 11; }
-          echo "正在拉取风驰补丁"
-          cp ./SCHED_PATCH/fengchi_${FILE}.patch ./
-          if [[ -f "fengchi_${FILE}.patch" ]]; then
-            echo "正在打风驰补丁"
-            dos2unix "fengchi_${FILE}.patch"
-            patch -p1 -F 3 < "fengchi_${FILE}.patch"
-            echo "fengchi_patch完成"
-          else
-            echo "❌ 未匹配到补丁，风驰内核暂未支持你的机型，请关闭后重试"
-            exit 12
-          fi
-
+   
       - name: Apply LSM_BBG
         if: ${{ github.event.inputs.LSM == 'true' }}
         run: |
