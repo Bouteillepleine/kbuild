@@ -81,7 +81,7 @@ on:
         type: string
         description: "回退SUSFS到指定哈希版本"
         required: false
-        default: ""
+        default: "f55d86eb9780844bc5ab2d6314b2d3654a07ca74"
       DYNAMIC_REPO:
         type: string
         description: "动态清单仓库所有者"
