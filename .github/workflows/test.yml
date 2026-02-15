@@ -6,7 +6,7 @@ on:
         type: choice
         description: "配置文件"
         required: true
-        default: oneplus_ace2_pro_b
+        default: oneplus_13r_b
         options:
           - oneplus_10r_v
           - oneplus_nord_3_v
@@ -94,12 +94,12 @@ on:
         type: string
         description: "自定义构建时间(输入F使用当前UTC时间)"
         required: false
-        default: "Thu Dec 11 04:17:27 UTC 2025"
+        default: "Sun Feb 15 15:16:17 UTC 2026"
       KSU_META:
         type: string
         description: "分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改)"
         required: false
-        default: "builtin/Numbersf/"
+        default: "main/⚡Ultra⚡/"
       SUFFIX:
         type: string
         description: "自定义内核后缀(不输入使用随机字符串)"
@@ -108,7 +108,7 @@ on:
       SUBLEVEL:
         description: "自定义内核等级欺骗(SUBLEVEL)"
         required: false
-        default: ""
+        default: "11-o-g64180ab070e"
       FAST_BUILD:
         type: boolean
         description: "是否启用极速构建？"
@@ -870,6 +870,19 @@ jobs:
           # TMPFS配置*
           echo "CONFIG_TMPFS_XATTR=y" >> "$CONFIG_FILE"
           echo "CONFIG_TMPFS_POSIX_ACL=y" >> "$CONFIG_FILE"
+          echo "CONFIG_DEBUG_KERNEL=n" >> "$CONFIG_FILE"
+          echo "CONFIG_DEBUG_INFO=n" >> "$CONFIG_FILE"
+          echo "CONFIG_DEBUG_INFO_DWARF4=n" >> "$CONFIG_FILE"
+          echo "CONFIG_LOCK_DEBUGGING=n" >> "$CONFIG_FILE"
+          echo "CONFIG_DEBUG_MUTEXES=n" >> "$CONFIG_FILE"
+          echo "CONFIG_DEBUG_SPINLOCK=n" >> "$CONFIG_FILE"
+          echo "CONFIG_DEBUG_ATOMIC_SLEEP=n" >> "$CONFIG_FILE"
+          echo "CONFIG_GDB_SCRIPTS=n" >> "$CONFIG_FILE"
+          echo "CONFIG_LD_DEAD_CODE_DATA_ELIMINATION=y" >> "$CONFIG_FILE"
+          echo "CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y" >> "$CONFIG_FILE"
+          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$CONFIG_FILE"
+          echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=n" >> "$CONFIG_FILE"
+          echo "CONFIG_OPTIMIZE_INLINING=y" >> "$CONFIG_FILE"
 
           # BBR & ECN配置*
           if [ "${{ github.event.inputs.BBR_ECN }}" = "true" ]; then
@@ -973,8 +986,7 @@ jobs:
             fi
           done
 
-      - name: Enable lto=thin For FAST
-        if: ${{ (env.KERNEL_VERSION == '5.10' || env.KERNEL_VERSION == '5.15') && github.event.inputs.FAST_BUILD == 'true' }}
+      - name: Enable lto=thin For FAST        
         run: |
           cd kernel_workspace/kernel_platform
           DEFCONFIG=./common/arch/arm64/configs/gki_defconfig
@@ -983,12 +995,6 @@ jobs:
           sed -i 's/^CONFIG_LTO_CLANG_FULL=y/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG"
           sed -i 's/^CONFIG_LTO_CLANG_NONE=y/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG"
           grep -q '^CONFIG_LTO_CLANG_THIN=y' "$DEFCONFIG" || echo 'CONFIG_LTO_CLANG_THIN=y' >> "$DEFCONFIG"
-
-      - name: Disable GPUEB
-        if: ${{ env.KERNEL_VERSION == '5.10' && startsWith(env.CPU, 'mt') }}
-        run: |
-          echo "Disabling GPUEB for MTK kernel 5.10"
-          sed -i '/obj-y.*gpueb/d' kernel_workspace/kernel-5.10/drivers/gpu/mediatek/Makefile
 
       - name: Build Kernel FAST
         if: ${{ github.event.inputs.FAST_BUILD == 'true' }}
@@ -1075,7 +1081,7 @@ jobs:
 
       - name: Make AnyKernel3
         run: |
-          git clone https://github.com/Numbersf/AnyKernel3 --depth=1
+          git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
           mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
           image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name "Image" | head -n 1)
@@ -1108,61 +1114,7 @@ jobs:
           rm -f Image
           mv oImage Image
           cp Image "${GITHUB_WORKSPACE}/AnyKernel3/Image"
-
-      - name: Download Latest SUSFS Module from CI
-        if: ${{ github.event.inputs.SUSFS_CI == 'CI' && github.event.inputs.SUSFS_META != '-1' }}
-        continue-on-error: true
-        run: |
-          LATEST_RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs?status=success" | \
-            jq -r '.workflow_runs[] | select(.head_branch == "v1.5.2+") | .id' | head -n 1)
-          if [ -z "$LATEST_RUN_ID" ]; then
-            echo "No successful run found for branch v1.5.2+"
-          else
-            ARTIFACT_URL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$LATEST_RUN_ID/artifacts" | jq -r '.artifacts[0].archive_download_url')
-            if [ -n "$ARTIFACT_URL" ]; then
-              curl -L -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o ksu_module_susfs_1.5.2+_CI.zip "$ARTIFACT_URL"
-              cp ksu_module_susfs_1.5.2+_CI.zip ./AnyKernel3/
-            else
-              echo "Failed to fetch artifact URL"
-            fi
-          fi
-
-      - name: Download Latest SUSFS Module from Release
-        if: ${{ github.event.inputs.SUSFS_CI == 'Release' && github.event.inputs.SUSFS_META != '-1' }}
-        continue-on-error: true
-        run: |
-          wget -O ksu_module_susfs_1.5.2+_Release.zip https://github.com/sidex15/ksu_module_susfs/releases/latest/download/ksu_module_susfs_1.5.2+.zip
-          cp ksu_module_susfs_1.5.2+_Release.zip ./AnyKernel3/
-
-      - name: Download Latest ReSukiSU APK from CI
-        continue-on-error: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          MANAGER_BRANCH="${{ steps.manager.outputs.manager_branch }}"
-          MANAGER_ARTIFACT="${{ steps.manager.outputs.manager_artifact }}"
-
-          echo "Using branch: $MANAGER_BRANCH"
-          echo "Downloading artifact: $MANAGER_ARTIFACT"
-
-          run_id=$(gh api "repos/ReSukiSU/ReSukiSU/actions/workflows/build-manager.yml/runs?branch=$MANAGER_BRANCH&status=success&per_page=1" --jq '.workflow_runs[0].id' || echo "")
-
-          if [[ -z "$run_id" ]]; then
-            echo "No successful workflow run found on branch $MANAGER_BRANCH. Skipping download."
-            exit 0
-          fi
-          artifact_url=$(gh api "repos/ReSukiSU/ReSukiSU/actions/runs/$run_id/artifacts" | jq -r ".artifacts[] | select(.name == \"$MANAGER_ARTIFACT\") | .archive_download_url" | head -n1)
-
-          if [[ -z "$artifact_url" ]]; then
-            echo "No artifact '$MANAGER_ARTIFACT' found in run $run_id. Skipping download."
-            exit 0
-          fi
-          echo "Downloading from: $artifact_url"
-          curl -fL -H "Authorization: token $GITHUB_TOKEN" -o "${MANAGER_ARTIFACT}.zip" "$artifact_url"
-          unzip -j "${MANAGER_ARTIFACT}.zip" "*.apk" -d ./AnyKernel3/
-
+      
       - name: Set zip Suffix
         id: suffix
         run: |
@@ -1173,71 +1125,6 @@ jobs:
         with:
           name: AnyKernel3_ReSukiSU_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.TKERNEL_VERSION }})${{ steps.suffix.outputs.value }}
           path: ./AnyKernel3/*
-
-      - name: Download and Unzip ZRAM
-        if: ${{ github.event.inputs.ZRAM == 'true' }}
-        id: zram_find
-        run: |
-          set -e
-          sudo apt install -y unzip
-          echo "尝试获取 ZRAM 模块 zip 下载链接..."
-          retries=3
-          success=0
-          for i in $(seq 1 $retries); do
-            echo "第 $i 次尝试下载..."
-            download_url=$(curl -s https://api.github.com/repos/FurLC/ZRAM-Module/releases/latest | \
-              grep "browser_download_url" | grep "ZRAM-Module-.*\.zip" | cut -d '"' -f 4 | head -n 1)
-
-            if [ -n "$download_url" ]; then
-              echo "✅ 成功获取下载链接: $download_url"
-              wget -N "$download_url" && success=1 && break
-            else
-              echo "⚠️ 获取下载链接失败，等待 3 秒后重试..."
-              sleep 3
-            fi
-          done
-
-          if [ "$success" -ne 1 ]; then
-            echo "❌ 连续 $retries 次尝试后仍然无法获取 ZRAM 模块下载链接"
-            echo "upload=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          unzip "$(ls -t ZRAM-Module-*.zip | head -1)" -d ZRAM-Module
-          target="./ZRAM-Module/zram/zram.ko"
-          echo "查找 zram.ko 模块文件..."
-          search_paths=(
-            "./kernel_workspace/kernel_platform/out"
-            "./kernel_workspace/device/qcom"
-          )
-          zram_path=""
-          for path in "${search_paths[@]}"; do
-            zram_path=$(find "$path" -type f -name "zram.ko" | head -n 1)
-            [ -n "$zram_path" ] && break
-          done
-          if [ -z "$zram_path" ]; then
-            zram_path=$(find "./kernel_workspace" -type f -name "zram.ko" | head -n 1)
-          fi
-          if [ -n "$zram_path" ] && [ -f "$zram_path" ]; then
-            echo "ZRAM module file finally located at: $zram_path"
-            mkdir -p "$(dirname "$target")"
-            if [ "$(realpath "$zram_path")" != "$(realpath "$target")" ]; then
-              cp "$zram_path" "$target"
-            else
-              echo "源文件与目标路径相同，跳过复制"
-            fi
-          else
-            echo "未找到 zram.ko 文件，可能是未支持的内核版本或者未成功构建"
-            echo "upload=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-      - name: Upload ZRAM Module
-        if: ${{ github.event.inputs.ZRAM == 'true' && steps.zram_find.outputs.upload != 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ZRAM-Module_${{ env.KERNEL_VERSION }}_${{ steps.extract_info.outputs.value }}
-          path: ZRAM-Module/*
-
+      
       - name: Post-build Disk Check
         run: df -h
