@@ -1,4 +1,4 @@
-name: Oneplus ReSukiSU/SukiSU
+name: Oneplus
 on:
   workflow_dispatch:
     inputs:
