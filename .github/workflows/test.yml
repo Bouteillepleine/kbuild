@@ -626,111 +626,147 @@ jobs:
           FILE: ${{ github.event.inputs.FILE }}
         run: |
           cd kernel_workspace
+          
+          # Clone SUSFS if enabled
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ github.event.inputs.SUSFS_META }}"
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.inputs.SUSFS_DEV == 'true' && '-dev' || '' }}
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}${{ github.event.inputs.SUSFS_DEV == 'true' && '-dev' || '' }} --depth=1
             cd susfs4ksu
             if [ -n "$SUSFS_META" ]; then
               if [[ "$SUSFS_META" =~ ^[0-9]+$ ]]; then
+                git fetch --deepen="$SUSFS_META"
                 git checkout HEAD~$SUSFS_META
               else
+                git fetch origin "$SUSFS_META"
                 git checkout "$SUSFS_META"
               fi
             else
-              echo "If SUSFS_META is empty, use the latest upstream SUSFS"
+              echo "✅ Using latest upstream SUSFS"
             fi
             cd ..
           fi
-          git clone https://github.com/ShirkNeko/SukiSU_patch.git
-          git clone https://github.com/Bouteillepleine/Action-Build.git
+          
+          # Clone required repositories
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git --depth=1
+          git clone https://github.com/Bouteillepleine/Build_Kernels.git --depth=1 -b SukiSU-Ultra
+          
+          # Create symlink for backward compatibility
+          ln -s Build_Kernels Action-Build
+          
           cd kernel_platform
+          
+          # Copy SUSFS patches if enabled
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
-            echo "Pulling SUSFS patch"
-            wget https://github.com/Bouteillepleine/Build_Kernels/raw/refs/heads/SukiSU-Ultra/patches/69_hide_stuff.patch -O ./common/69_hide_stuff.patch
+            echo "📦 Pulling SUSFS patches..."
+            cp ../Build_Kernels/patches/69_hide_stuff.patch ./common/
             cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch ./common/
-            cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
-            cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+            cp -r ../susfs4ksu/kernel_patches/fs/* ./common/fs/ 2>/dev/null || true
+            cp -r ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/ 2>/dev/null || true
           fi
 
           cd ./common
           GKI_V="${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}"
           SUBLEVEL=$(grep '^SUBLEVEL *=' Makefile | head -n1 | cut -d= -f2 | tr -d ' ')
 
+          # Fix for Android 13 Kernel 5.15 (SUBLEVEL < 123)
           if [ "$GKI_V" == "android13-5.15" ] && [ "$SUBLEVEL" -lt 123 ]; then
-            echo "Fixed some Bugs Caused by Kernel Versions 5.15.0~5.15.123 only Supporting Older Versions of the C Library..."
-            cp ../../Action-Build/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
-            patch -p1 < fix_5.15.legacy.patch
-            echo "Fix 5.15 Patch Complete!"
+            echo "🔧 Applying fix for Kernel 5.15.0~5.15.123..."
+            if [ -f ../../Build_Kernels/patches/fix_5.15.legacy ]; then
+              cp ../../Build_Kernels/patches/fix_5.15.legacy ./fix_5.15.legacy.patch
+              patch -p1 < fix_5.15.legacy.patch
+              echo "✅ Fix 5.15 Patch Complete!"
+            else
+              echo "⚠️ fix_5.15.legacy patch not found"
+            fi
           fi
 
+          # Fix for Kernel 6.6.0~6.6.30 without TrustyOS
           if [[ "${{ env.KV2 }}" == "66" && "${{ env.KV3 }}" -le 6630 && "${{ github.event.inputs.SUSFS_META }}" != "-1" ]]; then
             TRUSTY_EXISTS="false"
             if grep -q 'common-modules/trusty' "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml"; then
               TRUSTY_EXISTS="true"
             fi
-            echo "trusty_exists=$TRUSTY_EXISTS" >> $GITHUB_OUTPUT
+            
             if [[ "$TRUSTY_EXISTS" == "false" ]]; then
-              echo "Fixed a susfs error caused by the absence of TrustyOS in the source code and inventory for models with kernel versions 6.6.0~6.6.30"
+              echo "🔧 Fixing SUSFS for Kernel 6.6.0~6.6.30 without TrustyOS..."
               sed -i 's/-32,12 +32,38/-32,11 +32,37/g' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
               sed -i '/#include <trace\/hooks\/fs.h>/d' 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch
+              echo "✅ TrustyOS fix applied"
             fi
           fi
 
+          # Apply SUSFS patches
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             fake_patched=0
             
             # Android 14 + Kernel 6.1 specific fixes
             if [ "${{ env.KANDROID_VERSION }}" = "android14" ] && [ "${{ env.KERNEL_VERSION }}" = "6.1" ]; then
+              echo "🔧 Applying Android 14 + Kernel 6.1 fixes..."
               if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-                echo "vma_pages Line not found. Fake Patching!"
+                echo "⚠️ vma_pages line not found. Fake patching..."
                 fake_patched=1
               fi
               
               if ! grep -qxF '#include <linux/dma-buf.h>' ./fs/proc/base.c; then
-                echo "#include <linux/dma-buf.h> Line not found. Adding missing header"
+                echo "📝 Adding missing #include <linux/dma-buf.h>"
                 sed -i '/#include <linux\/cpufreq_times.h>/a #include <linux\/dma-buf.h>' ./fs/proc/base.c
               fi
             fi
             
+            # Android 15 + Kernel 6.6 specific fixes
             if [ "$GKI_V" = "android15-6.6" ]; then
               if ! grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                echo "NR Subpages Not Found, Patches Underway..."
-                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
+                echo "🔧 NR Subpages not found. Applying fake patch..."
+                sed -i -e '/int ret = 0, copied = 0;/a \\tunsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;' \
+                       -e '/int ret = 0, copied = 0;/a \\tpagemap_entry_t \*res = NULL;' ./fs/proc/task_mmu.c
                 fake_patched=1
               fi
             fi
             
+            # Android 12/13/14 VMA pages check
             if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
               if ! grep -qxF $'\tif (!vma_pages(vma))' ./fs/proc/task_mmu.c; then
-                echo "VMA Pages Not Found, Patches Underway..."
+                echo "🔧 VMA Pages not found. Applying fake patch..."
                 fake_patched=1
-                echo "Fake Patches Complete!"
               fi
             fi
 
-            echo "Add SUSFS Patches Underway..."
+            # Apply main SUSFS patch
+            echo "📦 Applying SUSFS patches..."
             patch -p1 < 50_add_susfs_in_gki-${{ env.KANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
-            echo "SUSFS Patches Complete!"
+            echo "✅ SUSFS patches applied"
 
+            # Revert fake patches if needed
             if [ "$fake_patched" = 1 ]; then
               if [ "$GKI_V" = "android15-6.6" ]; then
                 if grep -qxF $'\tunsigned int nr_subpages = __PAGE_SIZE / PAGE_SIZE;' ./fs/proc/task_mmu.c; then
-                  sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
-                  echo "Revert Patches, Add 69 Hide Stuff Patches..."
+                  echo "🔄 Reverting fake patches for Android 15..."
+                  sed -i -e '/unsigned int nr_subpages \= __PAGE_SIZE \/ PAGE_SIZE;/d' \
+                         -e '/pagemap_entry_t \*res = NULL;/d' ./fs/proc/task_mmu.c
+                  echo "📦 Applying 69_hide_stuff patch..."
                   patch -p1 < 69_hide_stuff.patch || true
-                  echo "69 Hide Stuff Patches Complete!"
+                  echo "✅ 69_hide_stuff patch applied"
                 fi
               fi
+              
               if [ "$GKI_V" = "android12-5.10" ] || [ "$GKI_V" = "android13-5.15" ] || [ "$GKI_V" = "android14-6.1" ]; then
                 if grep -qxF $'\t\tgoto show_pad;' ./fs/proc/task_mmu.c; then
-                  sed -i -e 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
+                  echo "🔄 Reverting goto show_pad..."
+                  sed -i 's/goto show_pad;/return 0;/' ./fs/proc/task_mmu.c
                 fi
               fi
             fi
             
-            if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ] && [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
-              cp ../../Action-Build/patches/No_5uS.patch ./
-              patch -p1 < No_5uS.patch || true
+            # Apply No_5uS patch if enabled
+            if [ "${{ github.event.inputs.XUS_FIX }}" = "true" ]; then
+              if [ -f ../../Build_Kernels/patches/No_5uS.patch ]; then
+                echo "📦 Applying No_5uS patch..."
+                cp ../../Build_Kernels/patches/No_5uS.patch ./
+                patch -p1 < No_5uS.patch || true
+                echo "✅ No_5uS patch applied"
+              else
+                echo "⚠️ No_5uS.patch not found"
+              fi
             fi
           fi
 
