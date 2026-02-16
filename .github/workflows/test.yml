@@ -54,7 +54,7 @@ on:
           - oneplus_15r
           - oneplus_15r_aosp
           - oneplus_15
-          - oneplus_15_aosp
+          - oneplus_15_w
       MANAGER_SOURCE:
         type: choice
         description: "Manager call direction"
