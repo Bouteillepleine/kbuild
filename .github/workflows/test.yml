@@ -48,12 +48,9 @@ on:
           - oneplus_ace5_race_b
           - oneplus_ace5_ultra_b
           - oneplus_pad2_mt6991_b
-          - oneplus_ace_6
-          - oneplus_ace_6t
-          - oneplus_ace_6t_aosp
-          - oneplus_15r
-          - oneplus_15r_aosp
-          - oneplus_15
+          - oneplus_ace_6          
+          - oneplus_ace_6t_w          
+          - oneplus_15r_w          
           - oneplus_15_w
       MANAGER_SOURCE:
         type: choice
