@@ -207,8 +207,8 @@ jobs:
 
           DYNAMIC_REPO_INPUT="${{ github.event.inputs.DYNAMIC_REPO }}"
           declare -A REPOS
-          REPOS["KingMikhail"]="KingMikhail|kernel_manifest"
-          REPOS["Appendix"]="KingMikhail|Kernel_Manifest_Appendix"
+          REPOS["KingMikhail"]="Bouteillepleine|kernel_manifest"
+          REPOS["Appendix"]="Bouteillepleine|Kernel_Manifest_Appendix"
           REPOS["Dynamic"]="${DYNAMIC_REPO_INPUT}|kernel_manifest"
 
           FOUND_REPO=""
