@@ -107,7 +107,7 @@ on:
         type: string
         description: "Custom kernel suffix (leave empty to use random string)"
         required: false
-        default: "11-o-gde312cf5bc85"
+        default: "8-g096cdb6ecefc-ab14358676-4k"
       SUBLEVEL:
         description: "Custom kernel sublevel spoofing (SUBLEVEL)"
         required: false
