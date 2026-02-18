@@ -897,6 +897,7 @@ jobs:
           # SUSFS configuration
           if [ "${{ github.event.inputs.SUSFS_META }}" != "-1" ]; then
             echo "CONFIG_KSU_SUSFS=y" >> "$CONFIG_FILE"
+            echo "CONFIG_KSU_MULTI_MANAGER_SUPPORT=y" >> "$CONFIG_FILE"
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONFIG_FILE"
             echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> "$CONFIG_FILE"
             echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$CONFIG_FILE"
@@ -1104,6 +1105,9 @@ jobs:
 
           cd ./common
 
+          # Define output directory
+          OUT="out"
+
           # Remap physical paths
           MAP="-fdebug-prefix-map=${GITHUB_WORKSPACE}=."
           MPMAP="-fmacro-prefix-map=${GITHUB_WORKSPACE}=."
@@ -1129,23 +1133,24 @@ jobs:
           if [[ "$ENABLE_RUST" == "true" ]]; then
             MAKE_ARGS=(RUSTC=../../prebuilts/rust/linux-x86/$RUSTC_VERSION/bin/rustc "${MAKE_ARGS[@]}")
           fi
-          make O=out "${MAKE_ARGS[@]}" gki_defconfig
+          make O="$OUT" "${MAKE_ARGS[@]}" gki_defconfig
           
           # LTO policy: thin for all kernels except 6.12 (none)
           if [[ "$KERNEL_VERSION" == "6.12" ]]; then
             echo ">> Set LTO = none (kernel 6.12)"
-            scripts/config --file out/.config -e LTO_CLANG
-            scripts/config --file out/.config -e LTO_CLANG_NONE
-            scripts/config --file out/.config -d LTO_CLANG_THIN
-            scripts/config --file out/.config -d LTO_CLANG_FULL
+            scripts/config --file "$OUT/.config" -e LTO_CLANG
+            scripts/config --file "$OUT/.config" -e LTO_CLANG_NONE
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_THIN
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_FULL
           else
             echo ">> Set LTO = thin (default)"
-            scripts/config --file out/.config -e LTO_CLANG
-            scripts/config --file out/.config -e LTO_CLANG_THIN
-            scripts/config --file out/.config -d LTO_CLANG_NONE
-            scripts/config --file out/.config -d LTO_CLANG_FULL
+            scripts/config --file "$OUT/.config" -e LTO_CLANG
+            scripts/config --file "$OUT/.config" -e LTO_CLANG_THIN
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_NONE
+            scripts/config --file "$OUT/.config" -d LTO_CLANG_FULL
           fi
 
+          # Disable problematic KUNIT tests
           disable_list=(
             CONFIG_REGMAP_KUNIT
             CONFIG_INPUT_KUNIT_TEST
@@ -1164,8 +1169,8 @@ jobs:
             scripts/config --file "$OUT/.config" -d "$sym" 2>/dev/null || true
           done
           
-          make O=out "${MAKE_ARGS[@]}" olddefconfig
-          make -j"$(nproc --all)" O=out "${MAKE_ARGS[@]}"
+          make O="$OUT" "${MAKE_ARGS[@]}" olddefconfig
+          make -j"$(nproc --all)" O="$OUT" "${MAKE_ARGS[@]}"
           ccache -s
 
       - name: Fallback to Build Kernel
