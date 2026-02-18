@@ -1,5 +1,4 @@
-name: Liquid Test
-
+name: One+
 on:
   workflow_dispatch:
     inputs:
