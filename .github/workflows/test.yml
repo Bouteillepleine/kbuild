@@ -584,8 +584,7 @@ jobs:
           cd kernel_workspace
 
           [ -d "kernel_patches" ] || git clone --depth=1 -b main_ksun https://github.com/luigimak/kernel_patches.git kernel_patches
-          [ -d "Action-Build" ] || git clone --depth=1 -b SukiSU-Ultra https://github.com/Numbersf/Action-Build.git Action-Build
-
+          
           if [ "${{ inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ inputs.SUSFS_META }}"
             BR="gki-${KANDROID_VERSION}-${KERNEL_VERSION}$( [ "${{ inputs.SUSFS_DEV }}" = "true" ] && echo "-dev" || true )"
@@ -659,8 +658,7 @@ jobs:
               done
 
               patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/overwrite_hook_mode.patch" || true
-              patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/ksu_toolkit.patch" || true
-
+             
               if [ "$susfs_version" = "v2.0.0" ] || [ "${KSUVER:-0}" -le 33095 ]; then
                 patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/multi_manager.patch" || true
               fi
@@ -718,6 +716,64 @@ jobs:
             patch -p1 --forward < "../kernel_patches/next/scope_min_manual_hooks_v1.4.patch"
           else
             echo "⚠️ KSUN hook patch not found, skipping"
+          fi
+
+      - name: Fix KernelSU Next ksu_late_loaded Build Error
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd kernel_workspace/common
+
+          INIT_C="drivers/kernelsu/core/init.c"
+
+          echo "🧩 Fixing KernelSU Next missing ksu_late_loaded declaration"
+
+          if [ ! -f "$INIT_C" ]; then
+            echo "⚠️ $INIT_C not found, skipping"
+            exit 0
+          fi
+
+          if grep -q "ksu_late_loaded" "$INIT_C"; then
+            if ! grep -qE '^(static[[:space:]]+)?bool[[:space:]]+ksu_late_loaded' "$INIT_C"; then
+              echo "Injecting missing static bool ksu_late_loaded;"
+
+              if grep -q "^#include" "$INIT_C"; then
+                awk '
+                  /^#include/ {
+                    print
+                    last_include = NR
+                    next
+                  }
+
+                  last_include && !inserted {
+                    print ""
+                    print "static bool ksu_late_loaded;"
+                    print ""
+                    inserted = 1
+                  }
+
+                  { print }
+
+                  END {
+                    if (!inserted) {
+                      print ""
+                      print "static bool ksu_late_loaded;"
+                    }
+                  }
+                ' "$INIT_C" > "$INIT_C.tmp"
+
+                mv "$INIT_C.tmp" "$INIT_C"
+              else
+                sed -i '1istatic bool ksu_late_loaded;\n' "$INIT_C"
+              fi
+
+              echo "✅ Added ksu_late_loaded definition"
+            else
+              echo "ℹ️ ksu_late_loaded already defined"
+            fi
+          else
+            echo "ℹ️ ksu_late_loaded is not referenced, no fix needed"
           fi
 
       - name: Apply Unicode Bypass
