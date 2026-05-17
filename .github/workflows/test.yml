@@ -799,6 +799,88 @@ jobs:
 
           echo "✅ SukiSU compatibility fixes applied"
 
+      - name: Fix SukiSU Ultra Android 16 / 6.12 Build Errors
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd kernel_workspace/common
+
+          echo "🧩 Fixing SukiSU Ultra Android 16 / 6.12 duplicate reboot handler and sulog arg pointer"
+
+          DISPATCH="drivers/kernelsu/supercall/dispatch.c"
+          SULOG_EVENT="drivers/kernelsu/sulog/event.c"
+
+          if [ -f "$DISPATCH" ]; then
+            count="$(grep -c '^int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user \*\*arg)' "$DISPATCH" || true)"
+
+            echo "ksu_handle_sys_reboot definition count: $count"
+
+            if [ "${count:-0}" -gt 1 ]; then
+              python3 - <<'PY'
+          from pathlib import Path
+          
+          p = Path("drivers/kernelsu/supercall/dispatch.c")
+          s = p.read_text()
+          
+          sig = "int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg)"
+          first = s.find(sig)
+          second = s.find(sig, first + len(sig)) if first != -1 else -1
+          
+          if first != -1 and second != -1:
+              brace = s.find("{", second)
+              if brace == -1:
+                  raise SystemExit("Could not find opening brace for duplicate ksu_handle_sys_reboot")
+          
+              depth = 0
+              end = None
+          
+              for i in range(brace, len(s)):
+                  ch = s[i]
+                  if ch == "{":
+                      depth += 1
+                  elif ch == "}":
+                      depth -= 1
+                      if depth == 0:
+                          end = i + 1
+                          break
+          
+              if end is None:
+                  raise SystemExit("Could not find end of duplicate ksu_handle_sys_reboot")
+          
+              # Remove trailing whitespace/newlines after the duplicate function.
+              while end < len(s) and s[end] in " \t\r\n":
+                  end += 1
+          
+              s = s[:second] + "\n/* duplicate ksu_handle_sys_reboot removed for android16-6.12 build */\n\n" + s[end:]
+              p.write_text(s)
+              print("✅ Removed second duplicate ksu_handle_sys_reboot definition")
+          else:
+              print("ℹ️ No duplicate ksu_handle_sys_reboot found")
+          PY
+            else
+              echo "ℹ️ No duplicate reboot handler detected"
+            fi
+          else
+            echo "⚠️ $DISPATCH not found"
+          fi
+
+          if [ -f "$SULOG_EVENT" ]; then
+            if grep -q 'ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)' "$SULOG_EVENT"; then
+              sed -i \
+                's/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, \&USER_ARG_NULL, gfp)/g' \
+                "$SULOG_EVENT"
+
+              echo "✅ Fixed USER_ARG_NULL pointer call in sulog/event.c"
+            else
+              echo "ℹ️ USER_ARG_NULL sulog call pattern not found"
+            fi
+          else
+            echo "⚠️ $SULOG_EVENT not found"
+          fi
+
+          echo "✅ SukiSU Android 16 / 6.12 build fixes applied"
+
       - name: Apply Unicode Bypass
         if: ${{ inputs.UNICODE_BYPASS }}
         shell: bash
