@@ -190,10 +190,6 @@ jobs:
             echo "DEVICE_NAME_SAFE=$DEVICE_NAME_SAFE"
           } >> "$GITHUB_OUTPUT"
 
-          echo "✅ Device: $DEVICE_NAME"
-          echo "✅ SoC: $CPU"
-          echo "✅ Branch: common-$KERNEL_BRANCH"
-
       - name: Record Build Start Time
         shell: bash
         run: |
@@ -239,7 +235,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           df -h
 
           sudo rm -rf \
@@ -251,7 +246,6 @@ jobs:
             /var/cache/apt/* || true
 
           sudo docker system prune -af 2>/dev/null || true
-
           df -h
 
       - name: Install Dependencies
@@ -267,9 +261,6 @@ jobs:
 
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* || true
-
-          ccache --version | head -1
-          df -h
 
       - name: Configure Git
         shell: bash
@@ -337,7 +328,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           df -h
 
           AVAIL_GB=$(df -BG "$GITHUB_WORKSPACE" | awk 'NR==2{gsub("G","",$4); print $4}')
@@ -375,16 +365,12 @@ jobs:
           mkdir -p kernel_workspace
           cd kernel_workspace
 
-          echo "🚀 Initializing repo for common-${KERNEL_BRANCH}"
-
           retry_command repo init \
             -u https://android.googlesource.com/kernel/manifest \
             -b "common-${KERNEL_BRANCH}" \
             --depth=1 \
             --no-clone-bundle \
             --no-tags
-
-          echo "🚀 Syncing kernel source"
 
           SYNC_JOBS="$(nproc)"
           if [ "$SYNC_JOBS" -gt 8 ]; then
@@ -406,8 +392,6 @@ jobs:
           fi
 
           rm -f common/android/abi_gki_protected_exports_* 2>/dev/null || true
-
-          echo "✅ Repo sync completed"
 
       - name: Kernel Version Handling
         shell: bash
@@ -446,9 +430,6 @@ jobs:
           echo "KV1=${KERNEL_VERSION%%.*}" >> "$GITHUB_ENV"
           echo "KV2=$(echo "$KERNEL_VERSION" | tr -d '.')" >> "$GITHUB_ENV"
           echo "KV3=$(echo "$NEW_VERSION" | tr -d '.')" >> "$GITHUB_ENV"
-
-          echo "✅ Android kernel branch: ${KANDROID_VERSION}-${KERNEL_VERSION}"
-          echo "✅ Target kernel version: ${NEW_VERSION}"
 
       - name: Apply Kernel Suffix
         shell: bash
@@ -503,20 +484,15 @@ jobs:
           SUKISU_REF="${{ inputs.SUKISU_REF }}"
 
           if [ -z "$SUKISU_REF" ]; then
-            echo "No SukiSU ref provided. Using builtin installer mode."
-
             curl --fail --location --proto '=https' -LSs \
               "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
           else
-            echo "Using SukiSU ref: $SUKISU_REF"
-
             curl --fail --location --proto '=https' -LSs \
               "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$SUKISU_REF"
           fi
 
           if [ ! -d "./KernelSU" ]; then
             echo "❌ KernelSU directory was not created by SukiSU setup."
-            echo "Debug folders:"
             find . -maxdepth 3 -type d \( -iname "*ksu*" -o -iname "*suki*" \) || true
             exit 1
           fi
@@ -531,18 +507,12 @@ jobs:
           echo "KSU_COMMIT_SHA=${KSU_COMMIT_SHA}" >> "$GITHUB_ENV"
           echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
 
-          echo "Detected SukiSU commits: $COMMITS_COUNT"
-          echo "Calculated SukiSU Ultra version: $KSU_VERSION"
-          echo "SukiSU Ultra commit: $KSU_COMMIT_SHA"
-
           if [ -f "./kernel/Makefile" ]; then
             sed -i "s/DKSU_VERSION=[0-9]*/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
             sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
             sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
             sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
           fi
-
-          echo "✅ SukiSU Ultra added"
 
       - name: Apply Patches SukiSU and SUSFS
         shell: bash
@@ -601,8 +571,6 @@ jobs:
               return 1
             fi
 
-            echo "📝 Applying: $description"
-
             if patch -p1 --dry-run < "$patch_file" >/dev/null 2>&1; then
               patch -p1 < "$patch_file"
               echo "✅ Applied: $description"
@@ -631,8 +599,6 @@ jobs:
             apply_patch_safe "50_add_susfs_in_gki-${KANDROID_VERSION}-${KERNEL_VERSION}.patch" "SUSFS Integration" || true
             fix_op15_recovery_bootloop_sus_mount
 
-            echo "🧩 Applying SukiSU SUSFS integration patch if available"
-
             if [ -f "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ] && [ -d "../KernelSU" ]; then
               cd ../KernelSU
               patch -p1 --forward < "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
@@ -650,8 +616,6 @@ jobs:
           set -euo pipefail
 
           cd kernel_workspace/common
-
-          echo "🧩 Applying SukiSU Ultra compatibility fixes"
 
           sed -i '/DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)/d' \
             drivers/kernelsu/kpm/super_access.c 2>/dev/null || true
@@ -702,42 +666,6 @@ jobs:
             done
           fi
 
-          if [ -f drivers/kernelsu/feature/selinux_hide.c ]; then
-            echo "Applying SukiSU Ultra selinux_hide backup_sepolicy fix"
-
-            if grep -q "backup_sepolicy" drivers/kernelsu/feature/selinux_hide.c && \
-               ! grep -q "static struct selinux_policy \*backup_sepolicy" drivers/kernelsu/feature/selinux_hide.c; then
-
-              awk '
-                /^#include/ {
-                  print
-                  last_include = NR
-                  next
-                }
-
-                last_include && !inserted {
-                  print ""
-                  print "static struct selinux_policy *backup_sepolicy;"
-                  print ""
-                  inserted = 1
-                }
-
-                { print }
-
-                END {
-                  if (!inserted) {
-                    print ""
-                    print "static struct selinux_policy *backup_sepolicy;"
-                  }
-                }
-              ' drivers/kernelsu/feature/selinux_hide.c > drivers/kernelsu/feature/selinux_hide.c.tmp
-
-              mv drivers/kernelsu/feature/selinux_hide.c.tmp drivers/kernelsu/feature/selinux_hide.c
-
-              echo "✅ Injected backup_sepolicy declaration"
-            fi
-          fi
-
           if [ -f drivers/kernelsu/Kbuild ]; then
             grep -q 'srctree)/$(src)' drivers/kernelsu/Kbuild || \
               sed -i '1i\ccflags-y += -I$(srctree)/$(src)' drivers/kernelsu/Kbuild
@@ -776,12 +704,6 @@ jobs:
                 drivers/kernelsu/supercall/dispatch.c
           fi
 
-          if [ -f drivers/kernelsu/runtime/ksud.c ]; then
-            grep -q "ksu_init_rc_hook_key_false" drivers/kernelsu/runtime/ksud.c || \
-              sed -i '1i\#include <linux/jump_label.h>\nDEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);\nDEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);' \
-                drivers/kernelsu/runtime/ksud.c
-          fi
-
           sed -i \
             's/extern struct static_key_true ksu_is_init_rc_hook_enabled;/DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);/' \
             fs/stat.c 2>/dev/null || true
@@ -797,8 +719,6 @@ jobs:
                 fs/read_write.c 2>/dev/null || true
           fi
 
-          echo "✅ SukiSU compatibility fixes applied"
-
       - name: Fix SukiSU Ultra Android 16 / 6.12 Build Errors
         shell: bash
         run: |
@@ -806,15 +726,11 @@ jobs:
 
           cd kernel_workspace/common
 
-          echo "🧩 Fixing SukiSU Ultra Android 16 / 6.12 duplicate reboot handler and sulog arg pointer"
-
           DISPATCH="drivers/kernelsu/supercall/dispatch.c"
           SULOG_EVENT="drivers/kernelsu/sulog/event.c"
 
           if [ -f "$DISPATCH" ]; then
             count="$(grep -c '^int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user \*\*arg)' "$DISPATCH" || true)"
-
-            echo "ksu_handle_sys_reboot definition count: $count"
 
             if [ "${count:-0}" -gt 1 ]; then
               python3 - <<'PY'
@@ -848,7 +764,6 @@ jobs:
               if end is None:
                   raise SystemExit("Could not find end of duplicate ksu_handle_sys_reboot")
           
-              # Remove trailing whitespace/newlines after the duplicate function.
               while end < len(s) and s[end] in " \t\r\n":
                   end += 1
           
@@ -858,11 +773,7 @@ jobs:
           else:
               print("ℹ️ No duplicate ksu_handle_sys_reboot found")
           PY
-            else
-              echo "ℹ️ No duplicate reboot handler detected"
             fi
-          else
-            echo "⚠️ $DISPATCH not found"
           fi
 
           if [ -f "$SULOG_EVENT" ]; then
@@ -870,16 +781,164 @@ jobs:
               sed -i \
                 's/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, USER_ARG_NULL, gfp)/ksu_sulog_capture(KSU_SULOG_EVENT_IOCTL_GRANT_ROOT, NULL, \&USER_ARG_NULL, gfp)/g' \
                 "$SULOG_EVENT"
-
-              echo "✅ Fixed USER_ARG_NULL pointer call in sulog/event.c"
-            else
-              echo "ℹ️ USER_ARG_NULL sulog call pattern not found"
             fi
-          else
-            echo "⚠️ $SULOG_EVENT not found"
           fi
 
-          echo "✅ SukiSU Android 16 / 6.12 build fixes applied"
+      - name: Fix SukiSU Ultra Android 16 / 6.12 Linker Symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd kernel_workspace/common
+
+          KSUD_C="drivers/kernelsu/runtime/ksud.c"
+          SELINUX_HIDE_C="drivers/kernelsu/feature/selinux_hide.c"
+          SELINUXFS_C="security/selinux/selinuxfs.c"
+          SERVICES_C="security/selinux/ss/services.c"
+          RULES_C="drivers/kernelsu/selinux/rules.c"
+
+          echo "🧩 Fixing SukiSU Ultra linker symbols"
+
+          if [ -f "$KSUD_C" ]; then
+            if ! grep -q '^#include <linux/jump_label.h>' "$KSUD_C"; then
+              sed -i '1i#include <linux/jump_label.h>' "$KSUD_C"
+            fi
+
+            sed -i \
+              's/extern struct static_key_false ksu_init_rc_hook_key_false;/DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);/g' \
+              "$KSUD_C" || true
+
+            sed -i \
+              's/extern struct static_key_false ksu_input_hook_key_false;/DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);/g' \
+              "$KSUD_C" || true
+
+            sed -i \
+              's/extern struct static_key_true ksu_init_rc_hook_key_false;/DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);/g' \
+              "$KSUD_C" || true
+
+            sed -i \
+              's/extern struct static_key_true ksu_input_hook_key_false;/DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);/g' \
+              "$KSUD_C" || true
+
+            if ! grep -q 'DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false)' "$KSUD_C"; then
+              sed -i '/#include <linux\/jump_label.h>/a DEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);' "$KSUD_C"
+            fi
+
+            if ! grep -q 'DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false)' "$KSUD_C"; then
+              sed -i '/#include <linux\/jump_label.h>/a DEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);' "$KSUD_C"
+            fi
+          fi
+
+          if [ -f "$SELINUX_HIDE_C" ]; then
+            if ! grep -q '^#include <linux/types.h>' "$SELINUX_HIDE_C"; then
+              sed -i '1i#include <linux/types.h>' "$SELINUX_HIDE_C"
+            fi
+
+            sed -i \
+              's/static struct selinux_policy \*backup_sepolicy;/struct selinux_policy *backup_sepolicy;/g' \
+              "$SELINUX_HIDE_C" || true
+
+            sed -i \
+              's/static bool ksu_selinux_hide_running;/bool ksu_selinux_hide_running;/g' \
+              "$SELINUX_HIDE_C" || true
+
+            if ! grep -qE '^struct selinux_policy \*backup_sepolicy;' "$SELINUX_HIDE_C"; then
+              sed -i '/#include <linux\/types.h>/a struct selinux_policy *backup_sepolicy;' "$SELINUX_HIDE_C"
+            fi
+
+            if ! grep -qE '^bool ksu_selinux_hide_running;' "$SELINUX_HIDE_C"; then
+              sed -i '/#include <linux\/types.h>/a bool ksu_selinux_hide_running;' "$SELINUX_HIDE_C"
+            fi
+          elif [ -f "$SELINUXFS_C" ]; then
+            if ! grep -q '^#include <linux/types.h>' "$SELINUXFS_C"; then
+              sed -i '1i#include <linux/types.h>' "$SELINUXFS_C"
+            fi
+
+            grep -qE '^struct selinux_policy \*backup_sepolicy;' "$SELINUXFS_C" || \
+              sed -i '/#include <linux\/types.h>/a struct selinux_policy *backup_sepolicy;' "$SELINUXFS_C"
+
+            grep -qE '^bool ksu_selinux_hide_running;' "$SELINUXFS_C" || \
+              sed -i '/#include <linux\/types.h>/a bool ksu_selinux_hide_running;' "$SELINUXFS_C"
+          fi
+
+          if [ -f "$SERVICES_C" ]; then
+            sed -i \
+              's/^static int security_context_to_sid_with_policy(/int security_context_to_sid_with_policy(/g' \
+              "$SERVICES_C" || true
+
+            sed -i \
+              's/^static int security_sid_to_context_with_policy(/int security_sid_to_context_with_policy(/g' \
+              "$SERVICES_C" || true
+
+            sed -i \
+              's/^static int security_compute_av_user_with_policy(/int security_compute_av_user_with_policy(/g' \
+              "$SERVICES_C" || true
+
+            if ! grep -q '^int security_context_to_sid_with_policy(' "$SERVICES_C"; then
+              cat >> "$SERVICES_C" <<'EOF'
+
+            /* SukiSU Ultra Android 16 / 6.12 compatibility wrapper */
+            int security_context_to_sid_with_policy(struct selinux_policy *policy,
+                                                  const char *scontext, u32 scontext_len,
+                                                  u32 *sid, gfp_t gfp)
+            {
+                    return security_context_to_sid(scontext, scontext_len, sid, gfp);
+            }
+            EOF
+                        fi
+            
+                        if ! grep -q '^int security_sid_to_context_with_policy(' "$SERVICES_C"; then
+                          cat >> "$SERVICES_C" <<'EOF'
+            
+            /* SukiSU Ultra Android 16 / 6.12 compatibility wrapper */
+            int security_sid_to_context_with_policy(struct selinux_policy *policy,
+                                                  u32 sid, char **scontext,
+                                                  u32 *scontext_len)
+            {
+                    return security_sid_to_context(sid, scontext, scontext_len);
+            }
+            EOF
+            fi
+
+            if ! grep -q '^int security_compute_av_user_with_policy(' "$SERVICES_C"; then
+              cat >> "$SERVICES_C" <<'EOF'
+
+            /* SukiSU Ultra Android 16 / 6.12 compatibility wrapper */
+            int security_compute_av_user_with_policy(struct selinux_policy *policy,
+                                                   u32 ssid, u32 tsid, u16 tclass,
+                                                   struct av_decision *avd)
+            {
+                    return security_compute_av_user(ssid, tsid, tclass, avd);
+            }
+            EOF
+            fi
+          fi
+
+          if grep -R "susfs_set_batch_sid" -n . \
+            --include='*.c' \
+            --include='*.h' \
+            | grep -v "$RULES_C" \
+            | grep -q .; then
+
+            while IFS= read -r file; do
+              sed -i \
+                's/^static void susfs_set_batch_sid(/void susfs_set_batch_sid(/g' \
+                "$file" || true
+
+              sed -i \
+                's/^static int susfs_set_batch_sid(/int susfs_set_batch_sid(/g' \
+                "$file" || true
+            done < <(grep -R -l "susfs_set_batch_sid" . --include='*.c' --include='*.h' | grep -v "$RULES_C" || true)
+
+          elif [ -f "$RULES_C" ]; then
+            if ! grep -q 'void susfs_set_batch_sid(unsigned int sid)' "$RULES_C"; then
+              sed -i '1i\
+          __attribute__((weak)) void susfs_set_batch_sid(unsigned int sid) { }\
+          ' "$RULES_C"
+                      fi
+          fi
+
+          echo "✅ SukiSU linker symbol fixes applied"
 
       - name: Apply Unicode Bypass
         if: ${{ inputs.UNICODE_BYPASS }}
@@ -1014,8 +1073,6 @@ jobs:
           cd kernel_workspace/common
 
           if [[ "${CPU}" == sm* ]]; then
-            echo "Patching IPv6_NAT_FIX.patch"
-
             if ! patch -p1 -F 3 < "${PATCH_DIR}/IPv6_NAT_FIX.patch"; then
               echo "::error::IPv6_NAT_FIX patch failed. Dumping all .rej files:"
               find . -name "*.rej" -exec echo "=== {} ===" \; -exec cat {} \;
@@ -1087,13 +1144,7 @@ jobs:
 
           export MAKEFLAGS="-j${BUILD_THREADS}"
 
-          echo "🚀 Starting kernel build at $(date)"
-          echo "🔧 CPU cores: ${NPROC}"
-          echo "🔧 Build threads: ${BUILD_THREADS}"
-
           if [ "${BUILD_NOCCACHE_ENABLED}" != "1" ]; then
-            echo "⚡ Enabling ccache"
-
             export PATH="/usr/lib/ccache:$PATH"
             export USE_CCACHE=1
             export CCACHE_EXEC="$(command -v ccache)"
@@ -1107,10 +1158,6 @@ jobs:
             export CXX="ccache clang++"
             export HOSTCC="ccache clang"
             export HOSTCXX="ccache clang++"
-
-            ccache -s || true
-          else
-            echo "🧹 BUILD_NOCCACHE enabled, ccache disabled"
           fi
 
           mkdir -p "${BAZEL_CACHE_DIR}/repository" "${BAZELISK_HOME}"
@@ -1118,8 +1165,6 @@ jobs:
           export BAZELISK_HOME="${BAZELISK_HOME}"
 
           if [ -f "build/build.sh" ]; then
-            echo "🏗️ Using build/build.sh path"
-
             time env \
               LTO=none \
               BUILD_CONFIG=common/build.config.gki.aarch64 \
@@ -1129,8 +1174,6 @@ jobs:
               CCACHE_BASEDIR="${CCACHE_BASEDIR:-}" \
               build/build.sh 2>&1 | tee "$ROOT/build.log"
           else
-            echo "🏗️ Using Bazel/Kleaf path"
-
             BAZEL_ARGS=(
               --config=fast
               --lto=none
@@ -1150,12 +1193,6 @@ jobs:
             time tools/bazel build \
               "${BAZEL_ARGS[@]}" \
               //common:kernel_aarch64_dist 2>&1 | tee "$ROOT/build.log"
-          fi
-
-          echo "✅ Kernel build completed at $(date)"
-
-          if [ "${BUILD_NOCCACHE_ENABLED}" != "1" ]; then
-            ccache -s || true
           fi
 
       - name: Capture Ccache Stats
@@ -1180,7 +1217,6 @@ jobs:
           git clone https://github.com/Bouteillepleine/AnyKernel3 --depth=1
 
           rm -rf ./AnyKernel3/.git
-
           mkdir -p kernel_workspace/out/Final-Image-Find/
 
           SEARCH_PATHS=(
@@ -1200,7 +1236,6 @@ jobs:
               -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"
 
             if [ -n "$image_path" ] && [ -f "$image_path" ]; then
-              echo "✅ Image found: $image_path"
               break
             fi
           done
@@ -1210,8 +1245,6 @@ jobs:
             find kernel_workspace -name "Image" -type f -print 2>/dev/null | head -50 || true
             exit 1
           fi
-
-          file "$image_path" || true
 
           cp "$image_path" ./AnyKernel3/Image
           cp "$image_path" kernel_workspace/out/Final-Image-Find/Image
@@ -1267,8 +1300,6 @@ jobs:
 
           ZIP_NAME="AnyKernel3_SukiSU_${KSUVER}_${DEVICE_NAME_SAFE}_${TKERNEL_VERSION}${{ steps.suffix.outputs.value }}.zip"
 
-          echo "📦 Creating: $ZIP_NAME"
-
           SUSFS_MODULE_PRESENT=false
 
           if [ "${{ inputs.SUSFS_META }}" != "-1" ]; then
@@ -1298,8 +1329,6 @@ jobs:
 
           echo "ZIP_SIZE=${ZIP_SIZE}" >> "$GITHUB_ENV"
           echo "ZIP_SHA256=${ZIP_SHA256}" >> "$GITHUB_ENV"
-
-          unzip -l "${GITHUB_WORKSPACE}/${ZIP_NAME}" | grep -E "(Image|ksu_module_susfs|anykernel.sh)" || true
 
       - name: Upload AK3 ZIP to GitHub Release
         uses: softprops/action-gh-release@v2
