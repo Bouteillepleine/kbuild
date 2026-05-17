@@ -1,4 +1,4 @@
-name: OnePlus 15 / 15T / 15R / Ace6T SukiSU Ultra
+name: OnePlus 15 / 15T / 15R / Ace6T KernelSU Next
 
 on:
   workflow_dispatch:
@@ -14,9 +14,9 @@ on:
           - oneplus15r
           - ace6t
 
-      SUKISU_REF:
+      KSUN_REF:
         type: string
-        description: "SukiSU branch / tag / commit. Empty = builtin installer mode"
+        description: "KernelSU Next branch / tag / commit. Empty = installer default"
         required: false
         default: ""
 
@@ -96,14 +96,14 @@ permissions:
   contents: write
 
 concurrency:
-  group: sukisu-${{ github.ref }}-${{ inputs.DEVICE }}
+  group: ksun-${{ github.ref }}-${{ inputs.DEVICE }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: >-
       ${{ inputs.DEVICE == 'oneplus15' && 'OnePlus 15' || inputs.DEVICE == 'oneplus15t' && 'OnePlus 15T' || inputs.DEVICE == 'oneplus15r' && 'OnePlus 15R' || inputs.DEVICE == 'ace6t' && 'Ace 6T' || inputs.DEVICE }}
-      SukiSU
+      KSUN
       ${{ inputs.LSM && '[LSM]' || '' }}
 
     runs-on: ubuntu-latest
@@ -212,9 +212,9 @@ jobs:
             fi
           fi
 
-          SUKISU_REF="${{ inputs.SUKISU_REF }}"
-          if [[ -n "$SUKISU_REF" && ! "$SUKISU_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
-            echo "❌ ERROR: Invalid SUKISU_REF: $SUKISU_REF"
+          KSUN_REF="${{ inputs.KSUN_REF }}"
+          if [[ -n "$KSUN_REF" && ! "$KSUN_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "❌ ERROR: Invalid KSUN_REF: $KSUN_REF"
             exit 1
           fi
 
@@ -283,10 +283,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-sukisu-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-${{ hashFiles('.github/workflows/*.yml') }}
+          key: ccache-ksun-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-${{ hashFiles('.github/workflows/*.yml') }}
           restore-keys: |
-            ccache-sukisu-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-
-            ccache-sukisu-${{ runner.os }}-
+            ccache-ksun-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-
+            ccache-ksun-${{ runner.os }}-
 
       - name: Initialize Ccache
         if: ${{ !inputs.BUILD_NOCCACHE }}
@@ -315,10 +315,10 @@ jobs:
             ${{ env.BAZELISK_HOME }}
             ~/.cache/bazel
             ~/.cache/bazelisk
-          key: bazel-sukisu-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-${{ hashFiles('.github/workflows/*.yml') }}
+          key: bazel-ksun-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-${{ hashFiles('.github/workflows/*.yml') }}
           restore-keys: |
-            bazel-sukisu-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-
-            bazel-sukisu-${{ runner.os }}-
+            bazel-ksun-${{ runner.os }}-${{ steps.device_config.outputs.KERNEL_BRANCH }}-
+            bazel-ksun-${{ runner.os }}-
 
       - name: Install Repo Tool
         shell: bash
@@ -491,68 +491,100 @@ jobs:
           apply_suffix "msm-kernel/scripts/setlocalversion"
           apply_suffix "external/dtc/scripts/setlocalversion"
 
-      - name: Add SukiSU Ultra
+      - name: Add KernelSU Next
         shell: bash
         run: |
           set -euo pipefail
 
           cd kernel_workspace
 
-          echo "🛠️ Adding SukiSU Ultra..."
+          echo "🛠️ Adding KernelSU Next..."
 
-          SUKISU_REF="${{ inputs.SUKISU_REF }}"
+          KSUN_REF="${{ inputs.KSUN_REF }}"
 
-          if [ -z "$SUKISU_REF" ]; then
-            echo "No SukiSU ref provided. Using builtin installer mode."
+          if [ -z "$KSUN_REF" ]; then
+            echo "No KSUN ref provided. Using installer default."
 
             curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           else
-            echo "Using SukiSU ref: $SUKISU_REF"
+            echo "Using KSUN ref: $KSUN_REF"
 
             curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "$SUKISU_REF"
+              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "$KSUN_REF"
           fi
 
-          if [ ! -d "./KernelSU" ]; then
-            echo "❌ KernelSU directory was not created by SukiSU setup."
+          if [ ! -d "./KernelSU-Next" ]; then
+            echo "❌ KernelSU-Next directory was not created."
             echo "Debug folders:"
-            find . -maxdepth 3 -type d \( -iname "*ksu*" -o -iname "*suki*" \) || true
+            find . -maxdepth 3 -type d \( -iname "*ksu*" -o -iname "*kernel*" \) || true
             exit 1
           fi
 
-          cd ./KernelSU
+          git submodule update --init --recursive || true
 
-          KSU_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+          cd ./KernelSU-Next/kernel
+
           COMMITS_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 30000)"
-          KSU_VERSION=$((COMMITS_COUNT + 37185))
 
-          echo "SUKISU_COMMIT_SHA=${KSU_COMMIT_SHA}" >> "$GITHUB_ENV"
-          echo "KSU_COMMIT_SHA=${KSU_COMMIT_SHA}" >> "$GITHUB_ENV"
-          echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
-
-          echo "Detected SukiSU commits: $COMMITS_COUNT"
-          echo "Calculated SukiSU Ultra version: $KSU_VERSION"
-          echo "SukiSU Ultra commit: $KSU_COMMIT_SHA"
-
-          if [ -f "./kernel/Makefile" ]; then
-            sed -i "s/DKSU_VERSION=[0-9]*/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
-            sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
-            sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
-            sed -i "s/DKSU_VERSION=16/DKSU_VERSION=${KSU_VERSION}/" "./kernel/Makefile" || true
+          if [ "$COMMITS_COUNT" -lt 2684 ]; then
+            BASE_VERSION=10200
+          else
+            BASE_VERSION=30000
           fi
 
-          echo "✅ SukiSU Ultra added"
+          KSU_VERSION=$((COMMITS_COUNT + BASE_VERSION))
 
-      - name: Apply Patches SukiSU and SUSFS
+          echo "Detected KSUN commits: $COMMITS_COUNT"
+          echo "Calculated KernelSU Next version: $KSU_VERSION"
+
+          sed -i "s/DKSU_VERSION=[0-9]*/DKSU_VERSION=${KSU_VERSION}/" Makefile || true
+          sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" Makefile || true
+
+          if [ -f ksu.c ]; then
+            sed -i 's/#if defined(CONFIG_STACKPROTECTOR) && (defined(CONFIG_ARM64) && !defined(CONFIG_STACKPROTECTOR_PER_TASK))/#if 0/' ksu.c || true
+          fi
+
+          if [[ "$KSU_VERSION" -gt 33095 ]] && [[ "${KERNEL_VERSION}" == "6.12" ]]; then
+            sed -i 's|ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include|ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include -I$(KSU_KERNEL_DIR)/include/uapi|' Kbuild || true
+            sed -i 's|$(src)|$(abspath $(src))|' Kbuild || true
+            sed -i 's|$(srctree)/$(src)|$(abspath $(srctree)/$(src))|' Kbuild || true
+          fi
+
+          if [ "$KSU_VERSION" -lt 12884 ]; then
+            echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
+          else
+            echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
+          fi
+
+          cd ..
+
+          KSU_COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+
+          echo "KSU_COMMIT_SHA=${KSU_COMMIT_SHA}" >> "$GITHUB_ENV"
+          echo "KSUN_COMMIT_SHA=${KSU_COMMIT_SHA}" >> "$GITHUB_ENV"
+          echo "KSUVER=${KSU_VERSION}" >> "$GITHUB_ENV"
+
+          cd ../common
+
+          cat >> arch/arm64/configs/gki_defconfig <<EOF
+          CONFIG_KSU=y
+          CONFIG_KSU_KPROBES_HOOK=n
+          EOF
+
+          echo "✅ KernelSU Next added"
+          echo "✅ Version: $KSU_VERSION"
+          echo "✅ Commit: ${KSU_COMMIT_SHA:0:8}"
+
+      - name: Fetch Patch Dependencies and SUSFS
         shell: bash
         run: |
           set -euo pipefail
 
           cd kernel_workspace
 
-          [ -d "SukiSU_patch" ] || git clone https://github.com/ShirkNeko/SukiSU_patch.git
-          [ -d "Action-Build" ] || git clone --depth=1 -b SukiSU-Ultra https://github.com/Numbersf/Action-Build.git
+          [ -d "kernel_patches" ] || git clone --depth=1 -b main_ksun https://github.com/luigimak/kernel_patches.git kernel_patches
+          [ -d "Action-Build" ] || git clone --depth=1 -b SukiSU-Ultra https://github.com/Numbersf/Action-Build.git Action-Build
 
           if [ "${{ inputs.SUSFS_META }}" != "-1" ]; then
             SUSFS_META="${{ inputs.SUSFS_META }}"
@@ -585,219 +617,108 @@ jobs:
 
             cd ..
 
-            cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${KANDROID_VERSION}-${KERNEL_VERSION}.patch ./common/
             cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
             cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
+            cp ./susfs4ksu/kernel_patches/50_add_susfs_in_gki-${KANDROID_VERSION}-${KERNEL_VERSION}.patch ./common/
           fi
 
-          cd common
+      - name: Apply SUSFS Patches
+        if: ${{ inputs.SUSFS_META != '-1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          apply_patch_safe() {
-            local patch_file="$1"
-            local description="${2:-$1}"
+          cd kernel_workspace
 
-            if [ ! -f "$patch_file" ]; then
-              echo "⚠️ Patch not found: $patch_file"
-              return 1
-            fi
+          echo "🧩 Applying SUSFS for KernelSU Next"
 
-            echo "📝 Applying: $description"
+          cd KernelSU-Next
 
-            if patch -p1 --dry-run < "$patch_file" >/dev/null 2>&1; then
-              patch -p1 < "$patch_file"
-              echo "✅ Applied: $description"
-              return 0
-            fi
+          if [ -f "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ]; then
+            patch -p1 --forward < "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
+          fi
 
-            echo "⚠️ Patch already applied or conflicts: $description"
-            return 1
-          }
+          susfs_version="${SUSVER:-unknown}"
 
-          fix_op15_recovery_bootloop_sus_mount() {
-            if [ -f ./fs/statfs.c ] && grep -qF 'for (; mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' ./fs/statfs.c; then
-              sed -i 's/for (; mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }/for (; mnt->mnt_id >= DEFAULT_KSU_MNT_ID \&\& mnt->mnt_parent \&\& mnt != mnt->mnt_parent; mnt = mnt->mnt_parent) { }/g' ./fs/statfs.c
-            fi
+          case "$susfs_version" in
+            v1.5.8)
+              patch -p1 --forward --fuzz=3 < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_apk_sign.c.patch" || true
+              patch -p1 --forward --fuzz=3 < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_core_hook.c.patch" || true
+              patch -p1 --forward --fuzz=3 < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_selinux.c.patch" || true
+              patch -p1 --forward --fuzz=3 < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_ksud.c.patch" || true
+              ;;
+            v1.5.9|v1.5.10|v1.5.11|v1.5.12)
+              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -printf "%f\n" 2>/dev/null | cut -d'.' -f1); do
+                patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_$file.c.patch" || true
+              done
+              patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_kernel_compat.c.patch" || true
+              ;;
+            v2.0.0|v2.1.0)
+              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \; 2>/dev/null); do
+                patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/fix_$file.patch" || true
+              done
 
-            if [ -f ./fs/proc/fd.c ] && grep -qF 'for (; mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }' ./fs/proc/fd.c; then
-              sed -i 's/for (; mnt->mnt_id >= DEFAULT_KSU_MNT_ID; mnt = mnt->mnt_parent) { }/for (; mnt->mnt_id >= DEFAULT_KSU_MNT_ID \&\& mnt->mnt_parent \&\& mnt != mnt->mnt_parent; mnt = mnt->mnt_parent) { }/g' ./fs/proc/fd.c
-            fi
+              patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/overwrite_hook_mode.patch" || true
+              patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/ksu_toolkit.patch" || true
 
-            if [ -f ./fs/statfs.c ] && grep -qF 'error = statfs_by_dentry(mnt->mnt.mnt_root, buf);' ./fs/statfs.c; then
-              sed -i 's/error = statfs_by_dentry(mnt->mnt.mnt_root, buf);/if (likely(susfs_is_current_proc_umounted_app())) { error = statfs_by_dentry(mnt->mnt.mnt_root, buf); } else { error = statfs_by_dentry(path->dentry, buf); }/g' ./fs/statfs.c
-            fi
-          }
+              if [ "$susfs_version" = "v2.0.0" ] || [ "${KSUVER:-0}" -le 33095 ]; then
+                patch -p1 --forward < "../kernel_patches/next/susfs_fix_patches/$susfs_version/multi_manager.patch" || true
+              fi
+              ;;
+            *)
+              echo "ℹ️ No KSUN-specific fix table for SUSFS version: $susfs_version"
+              ;;
+          esac
 
-          if [ "${{ inputs.SUSFS_META }}" != "-1" ]; then
-            apply_patch_safe "50_add_susfs_in_gki-${KANDROID_VERSION}-${KERNEL_VERSION}.patch" "SUSFS Integration" || true
-            fix_op15_recovery_bootloop_sus_mount
+          cd ../common
 
-            echo "🧩 Applying SukiSU SUSFS integration patch if available"
+          echo "Applying main SUSFS kernel patch"
 
-            if [ -f "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" ] && [ -d "../KernelSU" ]; then
-              cd ../KernelSU
-              patch -p1 --forward < "../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
-              cd ../common
-            fi
+          if ! patch -p1 --forward < "50_add_susfs_in_gki-${KANDROID_VERSION}-${KERNEL_VERSION}.patch"; then
+            echo "⚠️ SUSFS main patch reported conflicts"
 
-            if [ "${{ inputs.XUS_FIX }}" = "true" ]; then
-              apply_patch_safe "../../Action-Build/patches/No_5uS.patch" "5US Fix" || true
+            if find . -name "*.rej" -print -quit | grep -q .; then
+              echo "::error::Remaining SUSFS rejects:"
+              find . -name "*.rej" -exec echo "=== {} ===" \; -exec cat {} \;
+              exit 1
             fi
           fi
 
-      - name: Apply SukiSU Compatibility Fixes
+          cat >> arch/arm64/configs/gki_defconfig <<EOF
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_MAP=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
+          EOF
+
+          echo "✅ SUSFS patches applied"
+
+      - name: Apply KernelSU Hooks
+        if: ${{ env.NEED_HOOKS == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
 
           cd kernel_workspace/common
 
-          echo "🧩 Applying SukiSU Ultra compatibility fixes"
-
-          sed -i '/DEFINE_MEMBER(netlink_kernel_cfg, cb_mutex)/d' \
-            drivers/kernelsu/kpm/super_access.c 2>/dev/null || true
-
-          if [ -f drivers/kernelsu/hook/lsm_hook.c ]; then
-            sed -i \
-              's/security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");/security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), \&ksu_lsmid);/' \
-              drivers/kernelsu/hook/lsm_hook.c || true
-
-            grep -q "static struct lsm_id ksu_lsmid" drivers/kernelsu/hook/lsm_hook.c || \
-              sed -i '/security_add_hooks.*ksu_lsmid/i\    static struct lsm_id ksu_lsmid = { .name = "ksu", .id = LSM_ID_UNDEF };' \
-              drivers/kernelsu/hook/lsm_hook.c || true
+          if [ -f "../kernel_patches/next/scope_min_manual_hooks_v1.4.patch" ]; then
+            patch -p1 --forward < "../kernel_patches/next/scope_min_manual_hooks_v1.4.patch"
+          else
+            echo "⚠️ KSUN hook patch not found, skipping"
           fi
-
-          sed -i 's/is_zygote_normal_app_uid(new_uid)/is_appuid(new_uid)/' \
-            drivers/kernelsu/hook/setuid_hook.c 2>/dev/null || true
-
-          sed -i 's/ksu_handle_extra_susfs_work();/\/\/ ksu_handle_extra_susfs_work();/' \
-            drivers/kernelsu/hook/setuid_hook.c 2>/dev/null || true
-
-          if [ -f drivers/kernelsu/core/init.c ]; then
-            grep -q "feature/sucompat.h" drivers/kernelsu/core/init.c 2>/dev/null || \
-              sed -i '/#include "ksu.h"/a #include "feature/sucompat.h"' \
-              drivers/kernelsu/core/init.c 2>/dev/null || true
-
-            grep -q "hook/setuid_hook.h" drivers/kernelsu/core/init.c 2>/dev/null || \
-              sed -i '/#include "ksu.h"/a #include "hook/setuid_hook.h"' \
-              drivers/kernelsu/core/init.c 2>/dev/null || true
-          fi
-
-          mkdir -p drivers/kernelsu/kpm/uapi include/uapi
-
-          cp ../KernelSU/uapi/*.h drivers/kernelsu/kpm/uapi/ 2>/dev/null || true
-          cp ../KernelSU/uapi/*.h include/uapi/ 2>/dev/null || true
-
-          KLOG_SRC="$(find ../KernelSU -name "klog.h" -type f 2>/dev/null | head -n 1 || true)"
-
-          if [ -n "$KLOG_SRC" ]; then
-            for dest in \
-              drivers/kernelsu \
-              drivers/kernelsu/core \
-              drivers/kernelsu/feature \
-              drivers/kernelsu/hook \
-              drivers/kernelsu/selinux \
-              drivers/kernelsu/sulog; do
-              mkdir -p "$dest"
-              cp "$KLOG_SRC" "$dest/" 2>/dev/null || true
-            done
-          fi
-
-          if [ -f drivers/kernelsu/feature/selinux_hide.c ]; then
-            echo "Applying SukiSU Ultra selinux_hide backup_sepolicy fix"
-
-            if grep -q "backup_sepolicy" drivers/kernelsu/feature/selinux_hide.c && \
-               ! grep -q "static struct selinux_policy \*backup_sepolicy" drivers/kernelsu/feature/selinux_hide.c; then
-
-              awk '
-                /^#include/ {
-                  print
-                  last_include = NR
-                  next
-                }
-
-                last_include && !inserted {
-                  print ""
-                  print "static struct selinux_policy *backup_sepolicy;"
-                  print ""
-                  inserted = 1
-                }
-
-                { print }
-
-                END {
-                  if (!inserted) {
-                    print ""
-                    print "static struct selinux_policy *backup_sepolicy;"
-                  }
-                }
-              ' drivers/kernelsu/feature/selinux_hide.c > drivers/kernelsu/feature/selinux_hide.c.tmp
-
-              mv drivers/kernelsu/feature/selinux_hide.c.tmp drivers/kernelsu/feature/selinux_hide.c
-
-              echo "✅ Injected backup_sepolicy declaration"
-            fi
-          fi
-
-          if [ -f drivers/kernelsu/Kbuild ]; then
-            grep -q 'srctree)/$(src)' drivers/kernelsu/Kbuild || \
-              sed -i '1i\ccflags-y += -I$(srctree)/$(src)' drivers/kernelsu/Kbuild
-
-            grep -q "kpm/uapi" drivers/kernelsu/Kbuild || \
-              sed -i '/^obj-\$(CONFIG_KPM) += kpm\/compact.o/i\ccflags-\$(CONFIG_KPM) += -I$(srctree)/$(src)/kpm/uapi -I$(srctree)/include/uapi' \
-              drivers/kernelsu/Kbuild
-          fi
-
-          ARCH_H="$(find ../KernelSU -name "arch.h" -type f 2>/dev/null | head -n 1 || true)"
-
-          if [ -n "$ARCH_H" ]; then
-            for dest in feature hook infra selinux supercall core runtime; do
-              if [ -d "drivers/kernelsu/$dest" ]; then
-                cp "$ARCH_H" "drivers/kernelsu/$dest/" 2>/dev/null || true
-              fi
-            done
-          fi
-
-          KSU_CRED_DEF='extern struct cred *ksu_cred;'
-
-          while IFS= read -r f; do
-            grep -qF "$KSU_CRED_DEF" "$f" || sed -i "1i\\$KSU_CRED_DEF" "$f"
-          done < <(grep -rl "ksu_cred" drivers/kernelsu/ --include="*.c" 2>/dev/null || true)
-
-          if grep -q "allow_shell" drivers/kernelsu/policy/allowlist.c 2>/dev/null; then
-            if ! grep -q "extern bool allow_shell" drivers/kernelsu/policy/allowlist.c; then
-              sed -i '1i\#include <linux/types.h>\nextern bool allow_shell;' \
-                drivers/kernelsu/policy/allowlist.c
-            fi
-          fi
-
-          if grep -q "KERNEL_SU_VERSION" drivers/kernelsu/supercall/dispatch.c 2>/dev/null; then
-            grep -q "#define KERNEL_SU_VERSION" drivers/kernelsu/supercall/dispatch.c || \
-              sed -i "1i\\#ifndef KERNEL_SU_VERSION\n#define KERNEL_SU_VERSION ${KSUVER:-40754}\n#endif" \
-                drivers/kernelsu/supercall/dispatch.c
-          fi
-
-          if [ -f drivers/kernelsu/runtime/ksud.c ]; then
-            grep -q "ksu_init_rc_hook_key_false" drivers/kernelsu/runtime/ksud.c || \
-              sed -i '1i\#include <linux/jump_label.h>\nDEFINE_STATIC_KEY_FALSE(ksu_init_rc_hook_key_false);\nDEFINE_STATIC_KEY_FALSE(ksu_input_hook_key_false);' \
-                drivers/kernelsu/runtime/ksud.c
-          fi
-
-          sed -i \
-            's/extern struct static_key_true ksu_is_init_rc_hook_enabled;/DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);/' \
-            fs/stat.c 2>/dev/null || true
-
-          sed -i \
-            's/extern struct static_key_true ksu_is_input_hook_enabled;/DEFINE_STATIC_KEY_FALSE(ksu_is_input_hook_enabled);/' \
-            drivers/input/input.c 2>/dev/null || true
-
-          if [ -f fs/read_write.c ]; then
-            grep -q "DEFINE_STATIC_KEY_FALSE.*ksu_is_init_rc_hook_enabled" fs/read_write.c || \
-              sed -i \
-                's/DEFINE_STATIC_KEY_FALSE(ksu_is_init_rc_hook_enabled);/extern struct static_key_true ksu_is_init_rc_hook_enabled;/' \
-                fs/read_write.c 2>/dev/null || true
-          fi
-
-          echo "✅ SukiSU compatibility fixes applied"
 
       - name: Apply Unicode Bypass
         if: ${{ inputs.UNICODE_BYPASS }}
@@ -839,26 +760,9 @@ jobs:
           CPU="${CPU}"
 
           echo "CONFIG_KSU=y" >> "$CONFIG_FILE"
-          echo "CONFIG_KPM=n" >> "$CONFIG_FILE"
+          echo "CONFIG_KSU_KPROBES_HOOK=n" >> "$CONFIG_FILE"
 
-          if [ "${{ inputs.SUSFS_META }}" != "-1" ]; then
-            echo "CONFIG_KSU_SUSFS=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$CONFIG_FILE"
-            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> "$CONFIG_FILE"
-          else
+          if [ "${{ inputs.SUSFS_META }}" = "-1" ]; then
             echo "CONFIG_KSU_SUSFS=n" >> "$CONFIG_FILE"
           fi
 
@@ -1183,7 +1087,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP_NAME="AnyKernel3_SukiSU_${KSUVER}_${DEVICE_NAME_SAFE}_${TKERNEL_VERSION}${{ steps.suffix.outputs.value }}.zip"
+          ZIP_NAME="AnyKernel3_KSUN_${KSUVER}_${DEVICE_NAME_SAFE}_${TKERNEL_VERSION}${{ steps.suffix.outputs.value }}.zip"
 
           echo "📦 Creating: $ZIP_NAME"
 
@@ -1222,8 +1126,8 @@ jobs:
       - name: Upload AK3 ZIP to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: sukisu-ak3-${{ github.run_id }}
-          name: SukiSU AK3 build ${{ github.run_id }}
+          tag_name: ksun-ak3-${{ github.run_id }}
+          name: KSUN AK3 build ${{ github.run_id }}
           files: ${{ env.ZIP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1307,11 +1211,11 @@ jobs:
             STATUS_COLOR="🟡"
           fi
 
-          RELEASE_TAG="sukisu-ak3-${{ github.run_id }}"
+          RELEASE_TAG="ksun-ak3-${{ github.run_id }}"
           RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
 
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
-          # ${STATUS_COLOR} ${DEVICE_NAME} SukiSU Ultra Kernel Build ${STATUS_TEXT}
+          # ${STATUS_COLOR} ${DEVICE_NAME} KernelSU Next Kernel Build ${STATUS_TEXT}
 
           ## Build Status
 
@@ -1331,13 +1235,13 @@ jobs:
           | Kernel Version | ${TKERNEL_VERSION} |
           | Branch | common-${KERNEL_BRANCH} |
 
-          ## SukiSU Ultra
+          ## KernelSU Next
 
           | Property | Value |
           |----------|-------|
-          | SukiSU Ref | ${{ inputs.SUKISU_REF || 'builtin' }} |
-          | SukiSU Version | ${KSUVER} |
-          | SukiSU Commit | ${KSU_COMMIT_SHA} |
+          | KSUN Ref | ${{ inputs.KSUN_REF || 'installer default' }} |
+          | KSUN Version | ${KSUVER} |
+          | KSUN Commit | ${KSU_COMMIT_SHA} |
 
           ## SUSFS
 
@@ -1373,7 +1277,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sukisu_build_log_${{ inputs.DEVICE }}_${{ github.run_id }}
+          name: ksun_build_log_${{ inputs.DEVICE }}_${{ github.run_id }}
           path: kernel_workspace/build.log
           retention-days: 30
           if-no-files-found: warn
