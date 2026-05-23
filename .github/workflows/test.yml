@@ -35,7 +35,7 @@ on:
         description: "Enter KernelSU build JSON"
         required: true
         type: string
-        default: '[{"type":"KSUN","hash":"next"}]'
+        default: '[{"type":"KSUN","hash":"dev"}]'
 
       optimize_level:
         description: "Compiler optimization level"
@@ -619,17 +619,43 @@ jobs:
 
           echo "::endgroup::"
 
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: "1.82.0"
+      - name: Setup Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "::group::Setup Rust toolchains"
+
+          rustup toolchain install 1.82.0 --profile minimal
+          rustup toolchain install nightly --profile minimal
+
+          rustup default 1.82.0
+
+          echo "Rust stable toolchain:"
+          rustc --version
+          cargo --version
+
+          echo ""
+          echo "Rust nightly toolchain:"
+          rustc +nightly --version
+          cargo +nightly --version
+
+          echo "::endgroup::"
 
       - name: Install bindgen
         shell: bash
         run: |
           set -euo pipefail
-          rustup toolchain install nightly
-          cargo +nightly install bindgen-cli --version 0.69.5 || true
+
+          echo "::group::Install bindgen"
+
+          cargo +nightly install bindgen-cli --version 0.69.5 --locked || \
+          cargo +nightly install bindgen-cli --version 0.69.5
+
+          echo "bindgen version:"
+          bindgen --version
+
+          echo "::endgroup::"
 
       - name: Setup base environment
         shell: bash
@@ -960,9 +986,12 @@ jobs:
           git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
 
           if [ ! -d "$GITHUB_WORKSPACE/kernel_patches" ]; then
-            echo "::error::kernel_patches directory missing. It should have been copied from source-data/kernel_patches."
+            echo "::error::kernel_patches directory missing. It should have been copied from patch-data."
+            echo "Workspace tree:"
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type d | sort || true
             exit 1
           fi
+
 
           if [ "$OP_SUSFS" = "true" ]; then
             git clone https://gitlab.com/simonpunk/susfs4ksu.git
@@ -1146,47 +1175,7 @@ jobs:
 
           patch -p1 --forward < "50_add_susfs_in_${SUSFS_KERNEL_BRANCH}.patch"
 
-          echo "::endgroup::"
-
-      - name: Apply other patches
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "::group::Apply other patches"
-
-          cd "$CONFIG/kernel_platform/common"
-
-          KERNEL_VERSION="$KERNEL_VER"
-          MIN_VERSION="5.16"
-
-          if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
-            patch -p1 -F 3 < "../../../kernel_patches/gki_ptrace.patch" || true
-          fi
-
-          if [ "$OP_HMBIRD" = "true" ]; then
-            PATCH_FILE="../../../kernel_patches/oneplus/hmbird/fengchi_${OP_MODEL}_${OP_OS_VERSION}.patch"
-
-            if [ -f "$PATCH_FILE" ]; then
-              dos2unix "$PATCH_FILE"
-              patch -p1 -F 3 < "$PATCH_FILE"
-            else
-              echo "::warning::HMBIRD patch not found: $PATCH_FILE"
-            fi
-          fi
-
-          patch -p1 --forward < "../../../kernel_patches/common/optimized_mem_operations.patch" || true
-          patch -p1 --forward < "../../../kernel_patches/common/file_struct_8bytes_align.patch" || true
-          patch -p1 --forward < "../../../kernel_patches/common/reduce_cache_pressure.patch" || true
-
-          if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
-            patch -p1 --forward < "../../../kernel_patches/common/clear_page_16bytes_align.patch" || true
-          else
-            sed -e 's/SYM_FUNC_START_PI(clear_page)/SYM_FUNC_START_PI(__pi_clear_page)/' \
-              "../../../kernel_patches/common/clear_page_16bytes_align.patch" | patch -p1 -F3 --forward || true
-          fi
-
-          echo "::endgroup::"
+          echo "::endgroup::"    
 
       - name: Apply KSU hooks
         if: ${{ env.NEED_HOOKS == 'true' }}
