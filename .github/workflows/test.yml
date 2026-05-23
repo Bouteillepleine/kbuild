@@ -1458,23 +1458,67 @@ jobs:
           echo "Final KCPPFLAGS=$KCPPFLAGS"
 
           build_with_bazel=false
+          BAZEL_TARGET=""
 
           if [ -x "$KERNEL_PATH/tools/bazel" ]; then
             build_with_bazel=true
           fi
 
           if [ "$build_with_bazel" = "true" ]; then
-            echo "Bazel/Kleaf detected. Attempting Bazel build."
+            echo "Bazel/Kleaf detected. Discovering available Bazel targets."
 
             BAZEL_JOBS="$(nproc --all)"
             if [ "$BAZEL_JOBS" -gt 10 ]; then
               BAZEL_JOBS=10
             fi
 
-            BAZEL_TARGET="//common:kernel_aarch64_dist"
+            BAZEL_QUERY_LOG="$KERNEL_PATH/bazel_targets.log"
 
-            if ! "$KERNEL_PATH/tools/bazel" query "$BAZEL_TARGET" >/dev/null 2>&1; then
-              echo "::warning::Bazel target $BAZEL_TARGET not found. Will fall back to Make."
+            echo "Running Bazel query..."
+            "$KERNEL_PATH/tools/bazel" query '//...:*' > "$BAZEL_QUERY_LOG" 2>"$KERNEL_PATH/bazel_query_errors.log" || true
+
+            echo "Likely kernel/dist Bazel targets:"
+            grep -Ei '(kernel.*aarch64.*dist|aarch64.*kernel.*dist|kernel_aarch64|gki.*aarch64.*dist|aarch64.*dist)' "$BAZEL_QUERY_LOG" || true
+
+            candidate_targets=(
+              "//common:kernel_aarch64_dist"
+              "//common:kernel_aarch64"
+              "//common:kernel_aarch64_dist_dist"
+              "//common:kernel_aarch64_abi_dist"
+              "//common:kernel_aarch64_uapi_headers"
+              "//msm-kernel:kernel_aarch64_dist"
+              "//msm-kernel:kernel_aarch64"
+              "//kernel_platform:kernel_aarch64_dist"
+              "//:kernel_aarch64_dist"
+              "//:kernel_aarch64"
+            )
+
+            for target in "${candidate_targets[@]}"; do
+              if "$KERNEL_PATH/tools/bazel" query "$target" >/dev/null 2>&1; then
+                BAZEL_TARGET="$target"
+                echo "Selected Bazel target from candidates: $BAZEL_TARGET"
+                break
+              fi
+            done
+
+            if [ -z "$BAZEL_TARGET" ]; then
+              BAZEL_TARGET="$(
+                grep -Ei '(kernel.*aarch64.*dist|aarch64.*kernel.*dist|kernel_aarch64.*dist|gki.*aarch64.*dist|aarch64.*dist)' "$BAZEL_QUERY_LOG" \
+                  | grep -Ev '(headers|uapi|modules_prepare|config|abi_update|abi_dump|test)' \
+                  | head -n1 || true
+              )"
+
+              if [ -n "$BAZEL_TARGET" ]; then
+                echo "Selected Bazel target from query discovery: $BAZEL_TARGET"
+              fi
+            fi
+
+            if [ -z "$BAZEL_TARGET" ]; then
+              echo "::warning::No suitable Bazel kernel image/dist target found. Will fall back to Make."
+              echo "First 100 Bazel targets for diagnostics:"
+              sed -n '1,100p' "$BAZEL_QUERY_LOG" || true
+              echo "Bazel query errors:"
+              sed -n '1,120p' "$KERNEL_PATH/bazel_query_errors.log" || true
               build_with_bazel=false
             fi
           fi
@@ -1499,6 +1543,8 @@ jobs:
               --action_env=KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST}"
               --action_env=KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION}"
             )
+
+            echo "Building Bazel target: $BAZEL_TARGET"
 
             set -o pipefail
 
@@ -1841,6 +1887,8 @@ jobs:
           path: |
             ${{ env.CONFIG }}/kernel_platform/build.log
             ${{ env.CONFIG }}/kernel_platform/common/build.log
+            ${{ env.CONFIG }}/kernel_platform/bazel_targets.log
+            ${{ env.CONFIG }}/kernel_platform/bazel_query_errors.log
           retention-days: 7
           if-no-files-found: ignore
 
