@@ -237,20 +237,6 @@ jobs:
           echo "Build targets:"
           jq -r '.[] | "  - \(.model) (\(.os_version), \(.android_version)-\(.kernel_version), \(.ksu_type) - \(.ksu_hash))"' <<< "$merged_matrix"
 
-          echo "Duplicate target check:"
-          duplicates="$(
-            jq -r '.[] | "\(.model)|\(.os_version)|\(.android_version)|\(.kernel_version)|\(.ksu_type)|\(.ksu_hash)"' <<< "$merged_matrix" \
-              | sort \
-              | uniq -d
-          )"
-
-          if [ -n "$duplicates" ]; then
-            echo "::warning::Duplicate matrix targets detected:"
-            echo "$duplicates"
-          else
-            echo "No duplicate matrix targets detected."
-          fi
-
           wrapped="$(jq -n --argjson items "$merged_matrix" '{ include: $items }')"
 
           echo "matrix=$(jq -c . <<< "$wrapped")" >> "$GITHUB_OUTPUT"
@@ -375,12 +361,6 @@ jobs:
           mkdir -p kernel_patches
           cp -a patch-data/. ./kernel_patches/
           rm -rf kernel_patches/.git
-
-          echo "Prepared manifests:"
-          find manifests -maxdepth 4 -type f | sort
-
-          echo "Prepared kernel patches:"
-          find kernel_patches -maxdepth 5 -type f | sort | head -n 150
 
       - name: Resolve SUSFS branch from workflow inputs
         id: susfs
@@ -528,16 +508,12 @@ jobs:
 
           TOKEN="${GH_DEFAULT_TOKEN:-}"
 
-          if [ -z "$TOKEN" ]; then
-            echo "::warning::No GitHub token available. Public GitHub fetches may still work anonymously."
-            exit 0
+          if [ -n "$TOKEN" ]; then
+            git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+            git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
           fi
 
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
           git config --global advice.detachedHead false
-
-          echo "Configured GitHub HTTPS access using github.token."
 
       - name: Initialize and sync kernel source
         shell: bash
@@ -556,8 +532,6 @@ jobs:
           echo "OP_BRANCH=$OP_BRANCH"
           echo "OP_MANIFEST=$OP_MANIFEST"
           echo "OP_OS_VERSION=$OP_OS_VERSION"
-          echo "Repo bootstrap branch only: $BOOTSTRAP_BRANCH"
-          echo "Actual kernel/device revisions are taken from the WildKernels manifest below."
 
           if [[ "$OP_MANIFEST" == https://* ]]; then
             mkdir -p .repo/manifests
@@ -579,9 +553,6 @@ jobs:
             fi
 
             cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
-
-            echo "Wild manifest preview:"
-            sed -n '1,120p' .repo/manifests/temp_manifest.xml || true
 
           else
             "$REPO" init \
@@ -608,9 +579,6 @@ jobs:
               --no-tags \
               -v
           fi
-
-          echo "Repo manifest preview before sync:"
-          "$REPO" manifest | sed -n '1,160p' || true
 
           success=false
 
@@ -641,6 +609,114 @@ jobs:
           "$REPO" manifest -r | sed -n '1,160p' || true
 
           rm -rf AnyKernel3 || true
+
+          echo "::endgroup::"
+
+      - name: Repair and validate Kleaf/Bazel prebuilts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          KERNEL_PATH="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
+          BUILD_TOOLS_DIR="$KERNEL_PATH/prebuilts/build-tools"
+          MUSL_DIR="$BUILD_TOOLS_DIR/linux_musl-x86"
+          GNU_DIR="$BUILD_TOOLS_DIR/linux-x86"
+          PY3_CMD="$MUSL_DIR/bin/py3-cmd"
+
+          echo "::group::Kleaf/Bazel prebuilts validation"
+
+          cd "$KERNEL_PATH"
+
+          echo "Kernel platform: $KERNEL_PATH"
+          echo "Expected py3-cmd: $PY3_CMD"
+
+          if [ -f "$PY3_CMD" ]; then
+            chmod +x "$PY3_CMD" || true
+            echo "Kleaf py3-cmd already exists."
+            echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "::warning::Missing Kleaf py3-cmd at: $PY3_CMD"
+
+          echo "Current prebuilts/build-tools layout:"
+          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 120 || true
+
+          echo ""
+          echo "Attempt 1: repo sync prebuilts/build-tools if project exists."
+
+          cd "$GITHUB_WORKSPACE/$CONFIG"
+
+          if [ -d ".repo" ]; then
+            if repo list 2>/dev/null | grep -qE '(^| )prebuilts/build-tools($| :)'; then
+              repo sync \
+                -c \
+                --force-sync \
+                --no-clone-bundle \
+                --no-tags \
+                --optimized-fetch \
+                -j"$(nproc --all)" \
+                prebuilts/build-tools || true
+            else
+              echo "::warning::repo list does not expose prebuilts/build-tools as a standalone project."
+            fi
+          fi
+
+          if [ -f "$PY3_CMD" ]; then
+            chmod +x "$PY3_CMD" || true
+            echo "Kleaf py3-cmd restored by repo sync."
+            echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo ""
+          echo "Attempt 2: if linux-x86 build-tools exists, create linux_musl-x86 compatibility symlink."
+
+          if [ -d "$GNU_DIR/bin" ] && [ -f "$GNU_DIR/bin/py3-cmd" ]; then
+            rm -rf "$MUSL_DIR"
+            ln -s "$GNU_DIR" "$MUSL_DIR"
+            chmod +x "$PY3_CMD" || true
+
+            if [ -f "$PY3_CMD" ]; then
+              echo "Created compatibility symlink:"
+              echo "$MUSL_DIR -> $GNU_DIR"
+              echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
+              echo "::endgroup::"
+              exit 0
+            fi
+          fi
+
+          echo ""
+          echo "Attempt 3: fetch Android prebuilts/build-tools from android.googlesource.com."
+
+          rm -rf "$BUILD_TOOLS_DIR.tmp"
+
+          if git clone \
+            --depth=1 \
+            https://android.googlesource.com/platform/prebuilts/build-tools \
+            "$BUILD_TOOLS_DIR.tmp"; then
+
+            rm -rf "$BUILD_TOOLS_DIR"
+            mv "$BUILD_TOOLS_DIR.tmp" "$BUILD_TOOLS_DIR"
+
+            if [ -f "$PY3_CMD" ]; then
+              chmod +x "$PY3_CMD" || true
+              echo "Fetched prebuilts/build-tools successfully."
+              echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
+              echo "::endgroup::"
+              exit 0
+            fi
+          else
+            echo "::warning::Could not clone Android prebuilts/build-tools."
+          fi
+
+          echo "::warning::Kleaf build-tools are still incomplete. Bazel will be disabled for this target."
+          echo "KLEAF_PREBUILTS_OK=false" >> "$GITHUB_ENV"
+
+          echo "Final prebuilts/build-tools layout:"
+          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 120 || true
 
           echo "::endgroup::"
 
@@ -714,8 +790,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "::group::Detect Clang and Rust"
-
           KP="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
 
           CLANG_FOUND=false
@@ -762,9 +836,6 @@ jobs:
             echo "CLANG_VERSION=$CLANG_VERSION"
           } >> "$GITHUB_ENV"
 
-          echo "Detected Clang: $CLANG_VERSION"
-          echo "Clang bin path: $CLANG_BIN"
-
           CLANG_ROOT="$(dirname "$CLANG_BIN")"
 
           LIBCLANG_CANDIDATES=(
@@ -775,25 +846,15 @@ jobs:
             "$CLANG_BIN/../lib/x86_64-unknown-linux-gnu"
           )
 
-          LIBCLANG_FOUND=false
-
           for libdir in "${LIBCLANG_CANDIDATES[@]}"; do
             if [ -f "$libdir/libclang.so" ] || ls "$libdir"/libclang.so.* >/dev/null 2>&1; then
               {
                 echo "LIBCLANG_PATH=$libdir"
                 echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-gnu"
               } >> "$GITHUB_ENV"
-
-              echo "Using LIBCLANG_PATH=$libdir"
-              LIBCLANG_FOUND=true
               break
             fi
           done
-
-          if [ "$LIBCLANG_FOUND" != "true" ]; then
-            echo "::warning::No matching libclang found near $CLANG_BIN"
-            echo "::warning::bindgen may use system libclang"
-          fi
 
           if [ "$RUSTC_FOUND" = "true" ]; then
             RUSTC_VERSION="$("$RUSTC_BIN/rustc" --version | head -n1)"
@@ -803,14 +864,7 @@ jobs:
               echo "RUSTC_VERSION=$RUSTC_VERSION"
               echo "RUSTC=$RUSTC_BIN/rustc"
             } >> "$GITHUB_ENV"
-
-            echo "Detected Rust: $RUSTC_VERSION"
-            echo "Rust bin path: $RUSTC_BIN"
-          else
-            echo "::warning::No kernel prebuilt rustc found"
           fi
-
-          echo "::endgroup::"
 
       - name: Derive Clang short version
         shell: bash
@@ -844,11 +898,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-ksu-v5-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
+          key: ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
           restore-keys: |
-            ccache-ksu-v5-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
-            ccache-ksu-v5-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
-            ccache-ksu-v5-
+            ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
+            ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
+            ccache-ksu-v6-
 
       - name: Cache Bazel/Kleaf
         uses: actions/cache@v4
@@ -858,11 +912,11 @@ jobs:
             ${{ env.BAZELISK_HOME }}
             ~/.cache/bazel
             ~/.cache/bazelisk
-          key: bazel-kleaf-v1-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
+          key: bazel-kleaf-v2-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
           restore-keys: |
-            bazel-kleaf-v1-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
-            bazel-kleaf-v1-${{ env.OP_MODEL }}-
-            bazel-kleaf-v1-
+            bazel-kleaf-v2-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
+            bazel-kleaf-v2-${{ env.OP_MODEL }}-
+            bazel-kleaf-v2-
 
       - name: Configure ccache
         if: ${{ inputs.clean_build != true }}
@@ -934,13 +988,7 @@ jobs:
             ANYKERNEL_URL="https://github.com/TheWildJames/AnyKernel3.git"
           fi
 
-          echo "Cloning AnyKernel3 branch: $ANYKERNEL_BRANCH"
-
-          git clone \
-            --depth=1 \
-            --branch "$ANYKERNEL_BRANCH" \
-            "$ANYKERNEL_URL" \
-            AnyKernel3
+          git clone --depth=1 --branch "$ANYKERNEL_BRANCH" "$ANYKERNEL_URL" AnyKernel3
 
           if [ "$OP_SUSFS" = "true" ]; then
             git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
@@ -1012,7 +1060,7 @@ jobs:
 
           KSU_INPUT="${{ matrix.ksu_hash }}"
 
-          if [ -z "$KSU_INPUT" ] || [ "$KSU_INPUT" = "next" ]; then
+          if [ -z "$KSU_INPUT" ] || [ "$KSU_INPUT" = "next" ] || [ "$KSU_INPUT" = "dev" ]; then
             curl --fail --location --proto '=https' -LSs \
               "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           else
@@ -1161,67 +1209,20 @@ jobs:
 
           KSU_ENABLE_PATCH="$SUSFS_DIR/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
 
-          case "$susfs_version" in
-            "v2.1.0")
-              if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
-                cd "$KSU_DIR"
+          cd "$KSU_DIR"
+          patch -p1 --forward --fuzz=3 < "$KSU_ENABLE_PATCH" || true
 
-                patch -p1 --forward < "$KSU_ENABLE_PATCH" || true
+          if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
+            FIX_DIR="$KERNEL_PATCHES_DIR/next/susfs_fix_patches/$susfs_version"
 
-                FIX_DIR="$KERNEL_PATCHES_DIR/next/susfs_fix_patches/$susfs_version"
-
-                if [ ! -d "$FIX_DIR" ]; then
-                  echo "::error::SUSFS v2.1.0 fix directory not found: $FIX_DIR"
-                  find "$KERNEL_PATCHES_DIR/next/susfs_fix_patches" -maxdepth 1 -type d | sort || true
-                  exit 1
-                fi
-
-                shopt -s nullglob
-                for rej in ./kernel/*.rej ./kernel/*/*.rej; do
-                  file="$(basename "$rej" .rej)"
-                  fix_patch="$FIX_DIR/fix_$file.patch"
-
-                  if [ -f "$fix_patch" ]; then
-                    patch -p1 --forward < "$fix_patch"
-                  else
-                    echo "::warning::No fix patch found for rejected file: $file"
-                  fi
-                done
-                shopt -u nullglob
-
-                patch -p1 --forward < "$FIX_DIR/overwrite_hook_mode.patch"
-                patch -p1 --forward < "$FIX_DIR/ksu_toolkit.patch"
-
-                if [ "${KSUVER:-0}" -le 33095 ] && [ -f "$FIX_DIR/multi_manager.patch" ]; then
-                  patch -p1 --forward < "$FIX_DIR/multi_manager.patch"
-                fi
-
-                if [ "${KSUVER:-0}" -ge 33068 ] && [ "${KSUVER:-0}" -lt 33070 ] && [ -f "$FIX_DIR/multi_sepolicy_fix.patch" ]; then
-                  patch -p1 --forward < "$FIX_DIR/multi_sepolicy_fix.patch"
-                fi
-              else
-                cd "$KSU_DIR"
-                patch -p1 --forward < "$KSU_ENABLE_PATCH" || true
-              fi
-              ;;
-
-            *)
-              cd "$KSU_DIR"
-              patch -p1 --forward --fuzz=3 < "$KSU_ENABLE_PATCH" || true
-
-              if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
-                FIX_DIR="$KERNEL_PATCHES_DIR/next/susfs_fix_patches/$susfs_version"
-
-                if [ -d "$FIX_DIR" ]; then
-                  shopt -s nullglob
-                  for p in "$FIX_DIR"/*.patch; do
-                    patch -p1 --forward --fuzz=3 < "$p" || true
-                  done
-                  shopt -u nullglob
-                fi
-              fi
-              ;;
-          esac
+            if [ -d "$FIX_DIR" ]; then
+              shopt -s nullglob
+              for p in "$FIX_DIR"/*.patch; do
+                patch -p1 --forward --fuzz=3 < "$p" || true
+              done
+              shopt -u nullglob
+            fi
+          fi
 
           cd "$COMMON"
 
@@ -1460,12 +1461,20 @@ jobs:
           build_with_bazel=false
           BAZEL_TARGET=""
 
-          if [ -x "$KERNEL_PATH/tools/bazel" ]; then
+          KLEAF_PY3_CMD="$KERNEL_PATH/prebuilts/build-tools/linux_musl-x86/bin/py3-cmd"
+
+          if [ -x "$KERNEL_PATH/tools/bazel" ] && [ "${KLEAF_PREBUILTS_OK:-false}" = "true" ] && [ -f "$KLEAF_PY3_CMD" ]; then
+            chmod +x "$KLEAF_PY3_CMD" || true
             build_with_bazel=true
+          else
+            echo "::warning::Bazel/Kleaf wrapper exists but prerequisites are incomplete."
+            echo "tools/bazel exists: $([ -x "$KERNEL_PATH/tools/bazel" ] && echo yes || echo no)"
+            echo "KLEAF_PREBUILTS_OK=${KLEAF_PREBUILTS_OK:-unset}"
+            echo "py3-cmd exists: $([ -f "$KLEAF_PY3_CMD" ] && echo yes || echo no)"
           fi
 
           if [ "$build_with_bazel" = "true" ]; then
-            echo "Bazel/Kleaf detected. Discovering available Bazel targets."
+            echo "Bazel/Kleaf detected and prebuilts are valid. Discovering available Bazel targets."
 
             BAZEL_JOBS="$(nproc --all)"
             if [ "$BAZEL_JOBS" -gt 10 ]; then
@@ -1475,8 +1484,21 @@ jobs:
             BAZEL_QUERY_LOG="$KERNEL_PATH/bazel_targets.log"
 
             echo "Running Bazel query..."
-            "$KERNEL_PATH/tools/bazel" query '//...:*' > "$BAZEL_QUERY_LOG" 2>"$KERNEL_PATH/bazel_query_errors.log" || true
 
+            set +e
+            "$KERNEL_PATH/tools/bazel" query '//...:*' > "$BAZEL_QUERY_LOG" 2>"$KERNEL_PATH/bazel_query_errors.log"
+            BAZEL_QUERY_STATUS="$?"
+            set -e
+
+            if [ "$BAZEL_QUERY_STATUS" -ne 0 ]; then
+              echo "::warning::Bazel query failed with status $BAZEL_QUERY_STATUS."
+              echo "Bazel query errors:"
+              sed -n '1,160p' "$KERNEL_PATH/bazel_query_errors.log" || true
+              build_with_bazel=false
+            fi
+          fi
+
+          if [ "$build_with_bazel" = "true" ]; then
             echo "Likely kernel/dist Bazel targets:"
             grep -Ei '(kernel.*aarch64.*dist|aarch64.*kernel.*dist|kernel_aarch64|gki.*aarch64.*dist|aarch64.*dist)' "$BAZEL_QUERY_LOG" || true
 
@@ -1485,7 +1507,6 @@ jobs:
               "//common:kernel_aarch64"
               "//common:kernel_aarch64_dist_dist"
               "//common:kernel_aarch64_abi_dist"
-              "//common:kernel_aarch64_uapi_headers"
               "//msm-kernel:kernel_aarch64_dist"
               "//msm-kernel:kernel_aarch64"
               "//kernel_platform:kernel_aarch64_dist"
@@ -1515,10 +1536,7 @@ jobs:
 
             if [ -z "$BAZEL_TARGET" ]; then
               echo "::warning::No suitable Bazel kernel image/dist target found. Will fall back to Make."
-              echo "First 100 Bazel targets for diagnostics:"
               sed -n '1,100p' "$BAZEL_QUERY_LOG" || true
-              echo "Bazel query errors:"
-              sed -n '1,120p' "$KERNEL_PATH/bazel_query_errors.log" || true
               build_with_bazel=false
             fi
           fi
@@ -1642,7 +1660,6 @@ jobs:
 
           if [ -z "$IMAGE_PATH_FOUND" ] || [ ! -f "$IMAGE_PATH_FOUND" ]; then
             echo "::error::Kernel Image missing"
-            echo "Known Image candidates:"
             find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 50 || true
             exit 1
           fi
@@ -1856,6 +1873,7 @@ jobs:
           echo "KERNEL_VER=${KERNEL_VER:-unknown}"
           echo "BUILD_METHOD=${BUILD_METHOD:-unknown}"
           echo "IMAGE_PATH=${IMAGE_PATH:-unknown}"
+          echo "KLEAF_PREBUILTS_OK=${KLEAF_PREBUILTS_OK:-unknown}"
 
           echo ""
           echo "Global Git config:"
@@ -1867,9 +1885,9 @@ jobs:
 
           echo ""
           echo "Bazel/Kleaf files:"
-          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -maxdepth 4 \
-            \( -name "BUILD.bazel" -o -name "MODULE.bazel" -o -name "bazel" \) \
-            -print 2>/dev/null | sort | head -n 100 || true
+          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -maxdepth 5 \
+            \( -name "BUILD.bazel" -o -name "MODULE.bazel" -o -name "bazel" -o -name "py3-cmd" \) \
+            -print 2>/dev/null | sort | head -n 150 || true
 
           echo ""
           echo "Image candidates:"
