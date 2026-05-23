@@ -365,7 +365,7 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Checkout WildKernels source data
+      - name: Checkout WildKernels config data
         uses: actions/checkout@v4
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
@@ -375,8 +375,15 @@ jobs:
           sparse-checkout: |
             configs/
             manifests/
-            kernel_patches/
           sparse-checkout-cone-mode: false
+
+      - name: Checkout WildKernels kernel patches
+        uses: actions/checkout@v4
+        with:
+          repository: WildKernels/kernel_patches
+          ref: main
+          path: patch-data
+          fetch-depth: 1
 
       - name: Prepare external source files
         shell: bash
@@ -387,15 +394,30 @@ jobs:
 
           rm -rf manifests kernel_patches
 
+          if [ ! -d source-data/manifests ]; then
+            echo "::error::source-data/manifests not found"
+            echo "source-data tree:"
+            find source-data -maxdepth 4 -type d | sort || true
+            exit 1
+          fi
+
+          if [ ! -d patch-data ]; then
+            echo "::error::patch-data not found"
+            exit 1
+          fi
+
           cp -a source-data/manifests ./manifests
-          cp -a source-data/kernel_patches ./kernel_patches
+
+          mkdir -p kernel_patches
+          cp -a patch-data/. ./kernel_patches/
+          rm -rf kernel_patches/.git
 
           echo "Prepared manifests:"
           find manifests -maxdepth 4 -type f | sort | head -n 100
 
           echo ""
           echo "Prepared kernel patches:"
-          find kernel_patches -maxdepth 4 -type f | sort | head -n 100
+          find kernel_patches -maxdepth 5 -type f | sort | head -n 150
 
           echo "::endgroup::"
 
