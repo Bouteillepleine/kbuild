@@ -4,6 +4,9 @@ permissions:
   contents: write
   actions: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
     inputs:
@@ -91,7 +94,7 @@ jobs:
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
-          token: ${{ github.token }}
+          token: ${{ secrets.WILDKERNELS_TOKEN }}
           path: source-data
           fetch-depth: 1
           filter: ''
@@ -229,10 +232,24 @@ jobs:
             '
           )"
 
-          wrapped="$(jq -n --argjson items "$merged_matrix" '{ include: $items }')"
-
           echo "Build targets:"
           jq -r '.[] | "  - \(.model) (\(.os_version), \(.android_version)-\(.kernel_version), \(.ksu_type) - \(.ksu_hash))"' <<< "$merged_matrix"
+
+          echo "Duplicate target check:"
+          duplicates="$(
+            jq -r '.[] | "\(.model)|\(.os_version)|\(.android_version)|\(.kernel_version)|\(.ksu_type)|\(.ksu_hash)"' <<< "$merged_matrix" \
+              | sort \
+              | uniq -d
+          )"
+
+          if [ -n "$duplicates" ]; then
+            echo "::warning::Duplicate matrix targets detected:"
+            echo "$duplicates"
+          else
+            echo "No duplicate matrix targets detected."
+          fi
+
+          wrapped="$(jq -n --argjson items "$merged_matrix" '{ include: $items }')"
 
           echo "matrix=$(jq -c . <<< "$wrapped")" >> "$GITHUB_OUTPUT"
           echo "count=$count" >> "$GITHUB_OUTPUT"
@@ -314,7 +331,7 @@ jobs:
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
-          token: ${{ github.token }}
+          token: ${{ secrets.WILDKERNELS_TOKEN }}
           path: source-data
           fetch-depth: 1
           filter: ''
@@ -333,7 +350,7 @@ jobs:
         with:
           repository: WildKernels/kernel_patches
           ref: main
-          token: ${{ github.token }}
+          token: ${{ secrets.WILDKERNELS_TOKEN }}
           path: patch-data
           fetch-depth: 1
           filter: ''
@@ -489,6 +506,24 @@ jobs:
           fi
 
           echo "REPO=$REPO" >> "$GITHUB_ENV"
+
+      - name: Configure GitHub HTTPS authentication
+        shell: bash
+        env:
+          GH_READ_TOKEN: ${{ secrets.WILDKERNELS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_READ_TOKEN:-}" ]; then
+            echo "::error::WILDKERNELS_TOKEN is not set. Create this repository secret with read access to required GitHub repos."
+            exit 1
+          fi
+
+          git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git config --global advice.detachedHead false
+
+          echo "Configured authenticated GitHub HTTPS access."
 
       - name: Initialize and sync kernel source
         shell: bash
@@ -674,7 +709,6 @@ jobs:
 
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
             [ -d "$base/clang/host/linux-x86" ] || continue
-
             latest="$(ls -d "$base"/clang/host/linux-x86/clang-r*/ 2>/dev/null | sort -V | tail -n1 || true)"
 
             if [ -n "$latest" ] && [ -x "$latest/bin/clang" ]; then
@@ -686,7 +720,6 @@ jobs:
 
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
             [ -d "$base/rust/linux-x86/" ] || continue
-
             latest="$(ls -d "$base/rust/linux-x86/1."* 2>/dev/null | sort -V | tail -n1 || true)"
 
             if [ -n "$latest" ] && [ -x "$latest/bin/rustc" ]; then
@@ -828,6 +861,8 @@ jobs:
 
       - name: Clone AnyKernel3 and dependencies
         shell: bash
+        env:
+          GH_READ_TOKEN: ${{ secrets.WILDKERNELS_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -855,10 +890,21 @@ jobs:
             echo "SUSFS_BRANCH=$SUSFS_BRANCH" >> "$GITHUB_ENV"
           fi
 
-          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
+          if [ -z "${GH_READ_TOKEN:-}" ]; then
+            echo "::error::WILDKERNELS_TOKEN is not set. Cannot clone authenticated GitHub repositories."
+            exit 1
+          fi
+
+          rm -rf AnyKernel3 susfs4ksu
+
+          git clone \
+            --depth=1 \
+            --branch "$ANYKERNEL_BRANCH" \
+            "https://x-access-token:${GH_READ_TOKEN}@github.com/TheWildJames/AnyKernel3.git" \
+            AnyKernel3
 
           if [ "$OP_SUSFS" = "true" ]; then
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
 
             cd susfs4ksu
             git fetch --all --tags
@@ -1046,10 +1092,7 @@ jobs:
             exit 1
           fi
 
-          {
-            echo "SUSVER=$susfs_version"
-          } >> "$GITHUB_ENV"
-
+          echo "SUSVER=$susfs_version" >> "$GITHUB_ENV"
           echo "$susfs_version" >> "$GITHUB_WORKSPACE/$CONFIG/artifacts/${OP_MODEL}_${OP_OS_VERSION}.txt"
 
           version_lte() {
@@ -1344,14 +1387,6 @@ jobs:
           which clang || true
           clang --version | head -n1 || true
 
-          echo ""
-          echo "Build flags before defconfig:"
-          echo "KCFLAGS=$KCFLAGS"
-          echo "KCPPFLAGS=$KCPPFLAGS"
-          echo "CROSS_COMPILE=$CROSS_COMPILE"
-          echo "LLVM=$LLVM"
-          echo "LLVM_IAS=$LLVM_IAS"
-
           make LTO=none O="$OUT" gki_defconfig
 
           scripts/config --file "$OUT/.config" --set-str LOCALVERSION "${CUSTOM_LOCALVERSION:--OP-Wild}"
@@ -1387,7 +1422,6 @@ jobs:
 
           KCFLAGS="$KCFLAGS -Wno-error -pipe ${KCFLAGS_EXTRA}"
 
-          echo ""
           echo "Final build flags:"
           echo "KCFLAGS=$KCFLAGS"
           echo "KCPPFLAGS=$KCPPFLAGS"
@@ -1586,16 +1620,44 @@ jobs:
         if: success() && steps.create_zip.conclusion == 'success'
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-${{ matrix.ksu_type }}-${{ env.CONFIG }}_${{ env.OP_OS_VERSION }}
+          name: kernel-${{ matrix.ksu_type }}-${{ matrix.ksu_hash }}-${{ env.CONFIG }}_${{ env.OP_OS_VERSION }}_${{ env.ANDROID_VER }}_${{ env.KERNEL_VER }}
           path: ${{ env.CONFIG }}/artifacts/
           compression-level: 0
           retention-days: 20
+
+      - name: Failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "CONFIG=${CONFIG:-unknown}"
+          echo "OP_MODEL=${OP_MODEL:-unknown}"
+          echo "OP_OS_VERSION=${OP_OS_VERSION:-unknown}"
+          echo "OP_BRANCH=${OP_BRANCH:-unknown}"
+          echo "OP_MANIFEST=${OP_MANIFEST:-unknown}"
+          echo "ANDROID_VER=${ANDROID_VER:-unknown}"
+          echo "KERNEL_VER=${KERNEL_VER:-unknown}"
+
+          echo ""
+          echo "Global Git config:"
+          git config --global --list --show-origin || true
+
+          echo ""
+          echo "Workspace directories:"
+          find "$GITHUB_WORKSPACE" -maxdepth 3 -type d | sort | head -n 200 || true
+
+          echo ""
+          echo "Recent logs:"
+          find "$GITHUB_WORKSPACE" -maxdepth 8 -name "*.log" -type f -print | sort || true
 
       - name: Final cleanup and space report
         if: always()
         shell: bash
         run: |
           set -euo pipefail
+
+          rm -f ~/.gitconfig || true
 
           sudo rm -rf "$GITHUB_WORKSPACE/out" || true
           sudo rm -rf "$GITHUB_WORKSPACE/build" || true
