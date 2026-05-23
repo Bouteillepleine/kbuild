@@ -91,8 +91,10 @@ jobs:
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
+          token: ${{ github.token }}
           path: source-data
           fetch-depth: 1
+          filter: ''
           sparse-checkout: |
             configs/oos14/
             configs/oos15/
@@ -101,6 +103,7 @@ jobs:
             manifests/oos15/
             manifests/oos16/
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Generate build matrix
         id: set-matrix
@@ -311,8 +314,10 @@ jobs:
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
+          token: ${{ github.token }}
           path: source-data
           fetch-depth: 1
+          filter: ''
           sparse-checkout: |
             configs/oos14/
             configs/oos15/
@@ -321,14 +326,18 @@ jobs:
             manifests/oos15/
             manifests/oos16/
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Checkout WildKernels kernel patches
         uses: actions/checkout@v4
         with:
           repository: WildKernels/kernel_patches
           ref: main
+          token: ${{ github.token }}
           path: patch-data
           fetch-depth: 1
+          filter: ''
+          persist-credentials: false
 
       - name: Prepare external source files
         shell: bash
