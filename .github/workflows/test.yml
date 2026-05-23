@@ -656,6 +656,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "::group::Detect Clang and Rust"
+
           KP="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
 
           CLANG_FOUND=false
@@ -663,6 +665,7 @@ jobs:
 
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
             [ -d "$base/clang/host/linux-x86" ] || continue
+
             latest="$(ls -d "$base"/clang/host/linux-x86/clang-r*/ 2>/dev/null | sort -V | tail -n1 || true)"
 
             if [ -n "$latest" ] && [ -x "$latest/bin/clang" ]; then
@@ -674,6 +677,7 @@ jobs:
 
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
             [ -d "$base/rust/linux-x86/" ] || continue
+
             latest="$(ls -d "$base/rust/linux-x86/1."* 2>/dev/null | sort -V | tail -n1 || true)"
 
             if [ -n "$latest" ] && [ -x "$latest/bin/rustc" ]; then
@@ -693,13 +697,62 @@ jobs:
             exit 1
           fi
 
-          echo "CLANG_BIN_PATH=$CLANG_BIN" >> "$GITHUB_ENV"
-          echo "CLANG_VERSION=$("$CLANG_BIN/clang" --version | head -n1)" >> "$GITHUB_ENV"
+          CLANG_VERSION="$("$CLANG_BIN/clang" --version | head -n1)"
+
+          {
+            echo "CLANG_BIN_PATH=$CLANG_BIN"
+            echo "CLANG_VERSION=$CLANG_VERSION"
+          } >> "$GITHUB_ENV"
+
+          echo "Detected Clang: $CLANG_VERSION"
+          echo "Clang bin path: $CLANG_BIN"
+
+          CLANG_ROOT="$(dirname "$CLANG_BIN")"
+
+          LIBCLANG_CANDIDATES=(
+            "$CLANG_ROOT/lib"
+            "$CLANG_ROOT/lib/x86_64-unknown-linux-gnu"
+            "$CLANG_ROOT/lib64"
+            "$CLANG_BIN/../lib"
+            "$CLANG_BIN/../lib/x86_64-unknown-linux-gnu"
+          )
+
+          LIBCLANG_FOUND=false
+
+          for libdir in "${LIBCLANG_CANDIDATES[@]}"; do
+            if [ -f "$libdir/libclang.so" ] || ls "$libdir"/libclang.so.* >/dev/null 2>&1; then
+              {
+                echo "LIBCLANG_PATH=$libdir"
+                echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-gnu"
+              } >> "$GITHUB_ENV"
+
+              echo "Using LIBCLANG_PATH=$libdir"
+              LIBCLANG_FOUND=true
+              break
+            fi
+          done
+
+          if [ "$LIBCLANG_FOUND" != "true" ]; then
+            echo "::warning::No matching libclang found near $CLANG_BIN"
+            echo "::warning::bindgen may use system libclang"
+          fi
 
           if [ "$RUSTC_FOUND" = "true" ]; then
-            echo "RUSTC_BIN_PATH=$RUSTC_BIN" >> "$GITHUB_ENV"
-            echo "RUSTC_VERSION=$("$RUSTC_BIN/rustc" --version | head -n1)" >> "$GITHUB_ENV"
+            RUSTC_VERSION="$("$RUSTC_BIN/rustc" --version | head -n1)"
+
+            {
+              echo "RUSTC_BIN_PATH=$RUSTC_BIN"
+              echo "RUSTC_VERSION=$RUSTC_VERSION"
+              echo "RUSTC=$RUSTC_BIN/rustc"
+            } >> "$GITHUB_ENV"
+
+            echo "Detected Rust: $RUSTC_VERSION"
+            echo "Rust bin path: $RUSTC_BIN"
+          else
+            echo "::warning::No kernel prebuilt rustc found"
           fi
+
+          echo "::endgroup::"
 
       - name: Derive Clang short version
         shell: bash
@@ -1202,6 +1255,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "::group::Build kernel"
+
           KERNEL_PATH="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
           COMMON="$KERNEL_PATH/common"
 
@@ -1259,12 +1314,34 @@ jobs:
             export PATH="${BASE_PATH}:${PATH}"
           fi
 
+          if [ -n "${LIBCLANG_PATH:-}" ]; then
+            export LIBCLANG_PATH="$LIBCLANG_PATH"
+            echo "Using LIBCLANG_PATH=$LIBCLANG_PATH"
+          fi
+
+          if [ -n "${BINDGEN_EXTRA_CLANG_ARGS:-}" ]; then
+            export BINDGEN_EXTRA_CLANG_ARGS="$BINDGEN_EXTRA_CLANG_ARGS"
+            echo "Using BINDGEN_EXTRA_CLANG_ARGS=$BINDGEN_EXTRA_CLANG_ARGS"
+          fi
+
           if [ "${{ inputs.clean_build }}" = "true" ]; then
             export CCACHE_DISABLE=1
           fi
 
           OUT=out
           mkdir -p "$OUT"
+
+          echo "Compiler check:"
+          which clang || true
+          clang --version | head -n1 || true
+
+          echo ""
+          echo "Build flags before defconfig:"
+          echo "KCFLAGS=$KCFLAGS"
+          echo "KCPPFLAGS=$KCPPFLAGS"
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          echo "LLVM=$LLVM"
+          echo "LLVM_IAS=$LLVM_IAS"
 
           make LTO=none O="$OUT" gki_defconfig
 
@@ -1283,14 +1360,12 @@ jobs:
             KCFLAGS_EXTRA="-O2"
           fi
 
-          case "$OP_BRANCH" in
-            wild/sm8750|wild/sm8850|wild/sm8845)
-              KCFLAGS_EXTRA="-mcpu=oryon-1 ${KCFLAGS_EXTRA}"
-              ;;
-          esac
+          echo "CPU-specific -mcpu tuning is disabled for bindgen compatibility."
+          echo "No -mcpu=oryon-1 will be used."
 
           scripts/config --file "$OUT/.config" -e TRIM_UNUSED_KSYMS || true
           scripts/config --file "$OUT/.config" --set-str UNUSED_KSYMS_WHITELIST "abi_symbollist.raw" || true
+
           scripts/config --file "$OUT/.config" -e MODULE_SIG_PROTECT || true
           scripts/config --file "$OUT/.config" --set-str MODULE_SIG_PROTECT_LIST "protected_module_names_list" || true
 
@@ -1302,6 +1377,16 @@ jobs:
           make LTO=none O="$OUT" olddefconfig
 
           KCFLAGS="$KCFLAGS -Wno-error -pipe ${KCFLAGS_EXTRA}"
+
+          echo ""
+          echo "Final build flags:"
+          echo "KCFLAGS=$KCFLAGS"
+          echo "KCPPFLAGS=$KCPPFLAGS"
+
+          if echo "$KCFLAGS $KCPPFLAGS" | grep -q -- '-mcpu=oryon-1'; then
+            echo "::error::-mcpu=oryon-1 detected unexpectedly"
+            exit 1
+          fi
 
           BUILD_START="$(date +%s)"
 
@@ -1324,6 +1409,9 @@ jobs:
             tail -n 100 build.log || true
             exit 1
           fi
+
+          echo "Build completed in ${BUILD_TIME}s"
+          echo "::endgroup::"
 
       - name: ccache post-build statistics
         id: ccache_stats
