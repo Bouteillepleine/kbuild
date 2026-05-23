@@ -373,7 +373,9 @@ jobs:
           path: source-data
           fetch-depth: 1
           sparse-checkout: |
-            configs/
+            configs/oos14/
+            configs/oos15/
+            configs/oos16/
             manifests/oos14/
             manifests/oos15/
             manifests/oos16/
@@ -687,57 +689,89 @@ jobs:
           mkdir -p "$CONFIG"
           cd "$CONFIG"
 
+          REPO_REV="stable"
+          BOOTSTRAP_BRANCH="oneplus/sm8650"
+
+          echo "OP_MODEL=$OP_MODEL"
+          echo "OP_BRANCH=$OP_BRANCH"
+          echo "OP_MANIFEST=$OP_MANIFEST"
+          echo "OP_OS_VERSION=$OP_OS_VERSION"
+          echo "Bootstrap branch for repo init: $BOOTSTRAP_BRANCH"
+
           if [[ "$OP_MANIFEST" == https://* ]]; then
             mkdir -p .repo/manifests
-            curl --fail --show-error --location --proto '=https' "$OP_MANIFEST" -o .repo/manifests/temp_manifest.xml
+
+            curl --fail --show-error --location --proto '=https' \
+              "$OP_MANIFEST" \
+              -o .repo/manifests/temp_manifest.xml
 
             "$REPO" init \
               -u https://github.com/OnePlusOSS/kernel_manifest.git \
-              -b "oneplus/sm8650" \
+              -b "$BOOTSTRAP_BRANCH" \
               -m temp_manifest.xml \
-              --repo-rev=v2.16 \
+              --repo-rev="$REPO_REV" \
               --depth=1 \
               --no-clone-bundle \
-              --no-tags
+              --no-tags \
+              -v
 
           elif [[ "$OP_BRANCH" == wild/* ]]; then
             mkdir -p .repo/manifests
 
-            MANIFEST_PATH="../manifests/$(echo "$OP_OS_VERSION" | tr '[:upper:]' '[:lower:]')/$OP_MANIFEST"
+            MANIFEST_DIR="$(echo "$OP_OS_VERSION" | tr '[:upper:]' '[:lower:]')"
+            MANIFEST_PATH="../manifests/$MANIFEST_DIR/$OP_MANIFEST"
+
+            echo "Using WildKernels local manifest:"
+            echo "$MANIFEST_PATH"
 
             if [ ! -f "$MANIFEST_PATH" ]; then
               echo "::error::Manifest file not found: $MANIFEST_PATH"
-              echo "Available manifests:"
+              echo ""
+              echo "Expected manifest source:"
+              echo "WildKernels/OnePlus_KernelSU_SUSFS/manifests/$MANIFEST_DIR/$OP_MANIFEST"
+              echo ""
+              echo "Available local manifests:"
               find ../manifests -maxdepth 4 -type f | sort || true
               exit 1
             fi
 
             cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
 
+            echo ""
+            echo "Wild manifest preview:"
+            sed -n '1,120p' .repo/manifests/temp_manifest.xml || true
+
             "$REPO" init \
               -u https://github.com/OnePlusOSS/kernel_manifest.git \
-              -b "oneplus/sm8650" \
+              -b "$BOOTSTRAP_BRANCH" \
               -m temp_manifest.xml \
-              --repo-rev=v2.16 \
+              --repo-rev="$REPO_REV" \
               --depth=1 \
               --no-clone-bundle \
               --no-tags \
               -v
+
           else
             "$REPO" init \
               -u https://github.com/OnePlusOSS/kernel_manifest.git \
               -b "$OP_BRANCH" \
               -m "$OP_MANIFEST" \
-              --repo-rev=v2.16 \
+              --repo-rev="$REPO_REV" \
               --depth=1 \
               --no-clone-bundle \
               --no-tags \
               -v
           fi
 
+          echo ""
+          echo "Resolved repo manifest preview:"
+          "$REPO" manifest -r | sed -n '1,160p' || true
+
           success=false
 
           for i in 1 2 3; do
+            echo "repo sync attempt $i..."
+
             if "$REPO" sync \
               -c \
               --force-sync \
