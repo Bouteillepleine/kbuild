@@ -94,7 +94,7 @@ jobs:
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
-          token: ${{ secrets.WILDKERNELS_TOKEN }}
+          token: ${{ github.token }}
           path: source-data
           fetch-depth: 1
           filter: ''
@@ -331,7 +331,7 @@ jobs:
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
-          token: ${{ secrets.WILDKERNELS_TOKEN }}
+          token: ${{ github.token }}
           path: source-data
           fetch-depth: 1
           filter: ''
@@ -350,7 +350,7 @@ jobs:
         with:
           repository: WildKernels/kernel_patches
           ref: main
-          token: ${{ secrets.WILDKERNELS_TOKEN }}
+          token: ${{ github.token }}
           path: patch-data
           fetch-depth: 1
           filter: ''
@@ -510,20 +510,22 @@ jobs:
       - name: Configure GitHub HTTPS authentication
         shell: bash
         env:
-          GH_READ_TOKEN: ${{ secrets.WILDKERNELS_TOKEN }}
+          GH_DEFAULT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          if [ -z "${GH_READ_TOKEN:-}" ]; then
-            echo "::error::WILDKERNELS_TOKEN is not set. Create this repository secret with read access to required GitHub repos."
-            exit 1
+          TOKEN="${GH_DEFAULT_TOKEN:-}"
+
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::No GitHub token available. Public GitHub fetches may still work anonymously."
+            exit 0
           fi
 
-          git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "https://github.com/"
-          git config --global url."https://x-access-token:${GH_READ_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
           git config --global advice.detachedHead false
 
-          echo "Configured authenticated GitHub HTTPS access."
+          echo "Configured GitHub HTTPS access using github.token."
 
       - name: Initialize and sync kernel source
         shell: bash
@@ -709,6 +711,7 @@ jobs:
 
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
             [ -d "$base/clang/host/linux-x86" ] || continue
+
             latest="$(ls -d "$base"/clang/host/linux-x86/clang-r*/ 2>/dev/null | sort -V | tail -n1 || true)"
 
             if [ -n "$latest" ] && [ -x "$latest/bin/clang" ]; then
@@ -720,6 +723,7 @@ jobs:
 
           for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
             [ -d "$base/rust/linux-x86/" ] || continue
+
             latest="$(ls -d "$base/rust/linux-x86/1."* 2>/dev/null | sort -V | tail -n1 || true)"
 
             if [ -n "$latest" ] && [ -x "$latest/bin/rustc" ]; then
@@ -862,7 +866,7 @@ jobs:
       - name: Clone AnyKernel3 and dependencies
         shell: bash
         env:
-          GH_READ_TOKEN: ${{ secrets.WILDKERNELS_TOKEN }}
+          GH_DEFAULT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -890,17 +894,22 @@ jobs:
             echo "SUSFS_BRANCH=$SUSFS_BRANCH" >> "$GITHUB_ENV"
           fi
 
-          if [ -z "${GH_READ_TOKEN:-}" ]; then
-            echo "::error::WILDKERNELS_TOKEN is not set. Cannot clone authenticated GitHub repositories."
-            exit 1
+          rm -rf AnyKernel3 susfs4ksu
+
+          TOKEN="${GH_DEFAULT_TOKEN:-}"
+
+          if [ -n "$TOKEN" ]; then
+            ANYKERNEL_URL="https://x-access-token:${TOKEN}@github.com/TheWildJames/AnyKernel3.git"
+          else
+            ANYKERNEL_URL="https://github.com/TheWildJames/AnyKernel3.git"
           fi
 
-          rm -rf AnyKernel3 susfs4ksu
+          echo "Cloning AnyKernel3 branch: $ANYKERNEL_BRANCH"
 
           git clone \
             --depth=1 \
             --branch "$ANYKERNEL_BRANCH" \
-            "https://x-access-token:${GH_READ_TOKEN}@github.com/TheWildJames/AnyKernel3.git" \
+            "$ANYKERNEL_URL" \
             AnyKernel3
 
           if [ "$OP_SUSFS" = "true" ]; then
@@ -1387,6 +1396,14 @@ jobs:
           which clang || true
           clang --version | head -n1 || true
 
+          echo ""
+          echo "Build flags before defconfig:"
+          echo "KCFLAGS=$KCFLAGS"
+          echo "KCPPFLAGS=$KCPPFLAGS"
+          echo "CROSS_COMPILE=$CROSS_COMPILE"
+          echo "LLVM=$LLVM"
+          echo "LLVM_IAS=$LLVM_IAS"
+
           make LTO=none O="$OUT" gki_defconfig
 
           scripts/config --file "$OUT/.config" --set-str LOCALVERSION "${CUSTOM_LOCALVERSION:--OP-Wild}"
@@ -1422,6 +1439,7 @@ jobs:
 
           KCFLAGS="$KCFLAGS -Wno-error -pipe ${KCFLAGS_EXTRA}"
 
+          echo ""
           echo "Final build flags:"
           echo "KCFLAGS=$KCFLAGS"
           echo "KCPPFLAGS=$KCPPFLAGS"
