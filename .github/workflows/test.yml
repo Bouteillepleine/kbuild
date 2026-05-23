@@ -101,23 +101,37 @@ jobs:
       device_count: ${{ steps.set-matrix.outputs.count }}
 
     steps:
+      - name: Test WildKernels config repository access
+        shell: bash
+        env:
+          WILDKERNELS_TOKEN: ${{ secrets.WILDKERNELS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "Testing access to WildKernels/OnePlus_KernelSU_SUSFS"
+
+          if [ -n "${WILDKERNELS_TOKEN:-}" ]; then
+            git ls-remote "https://x-access-token:${WILDKERNELS_TOKEN}@github.com/WildKernels/OnePlus_KernelSU_SUSFS.git" HEAD
+          else
+            git ls-remote "https://github.com/WildKernels/OnePlus_KernelSU_SUSFS.git" HEAD
+          fi
+
       - name: Checkout WildKernels config and manifest data
         uses: actions/checkout@v4
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
-          token: ${{ github.token }}
+          token: ${{ secrets.WILDKERNELS_TOKEN || github.token }}
           path: source-data
           fetch-depth: 1
-          filter: ''
           sparse-checkout: |
-            configs/oos14/
-            configs/oos15/
-            configs/oos16/
-            manifests/oos14/
-            manifests/oos15/
-            manifests/oos16/
-          sparse-checkout-cone-mode: false
+            configs/oos14
+            configs/oos15
+            configs/oos16
+            manifests/oos14
+            manifests/oos15
+            manifests/oos16
+          sparse-checkout-cone-mode: true
           persist-credentials: false
 
       - name: Generate build matrix
@@ -339,23 +353,39 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Test WildKernels repository access
+        shell: bash
+        env:
+          WILDKERNELS_TOKEN: ${{ secrets.WILDKERNELS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          echo "Testing access to WildKernels repositories"
+
+          if [ -n "${WILDKERNELS_TOKEN:-}" ]; then
+            git ls-remote "https://x-access-token:${WILDKERNELS_TOKEN}@github.com/WildKernels/OnePlus_KernelSU_SUSFS.git" HEAD
+            git ls-remote "https://x-access-token:${WILDKERNELS_TOKEN}@github.com/WildKernels/kernel_patches.git" HEAD
+          else
+            git ls-remote "https://github.com/WildKernels/OnePlus_KernelSU_SUSFS.git" HEAD
+            git ls-remote "https://github.com/WildKernels/kernel_patches.git" HEAD
+          fi
+
       - name: Checkout WildKernels config and manifest data
         uses: actions/checkout@v4
         with:
           repository: WildKernels/OnePlus_KernelSU_SUSFS
           ref: main
-          token: ${{ github.token }}
+          token: ${{ secrets.WILDKERNELS_TOKEN || github.token }}
           path: source-data
           fetch-depth: 1
-          filter: ''
           sparse-checkout: |
-            configs/oos14/
-            configs/oos15/
-            configs/oos16/
-            manifests/oos14/
-            manifests/oos15/
-            manifests/oos16/
-          sparse-checkout-cone-mode: false
+            configs/oos14
+            configs/oos15
+            configs/oos16
+            manifests/oos14
+            manifests/oos15
+            manifests/oos16
+          sparse-checkout-cone-mode: true
           persist-credentials: false
 
       - name: Checkout WildKernels kernel patches
@@ -363,10 +393,9 @@ jobs:
         with:
           repository: WildKernels/kernel_patches
           ref: main
-          token: ${{ github.token }}
+          token: ${{ secrets.WILDKERNELS_TOKEN || github.token }}
           path: patch-data
           fetch-depth: 1
-          filter: ''
           persist-credentials: false
 
       - name: Prepare external source files
@@ -650,8 +679,6 @@ jobs:
             --current-branch \
             --optimized-fetch
 
-          echo "Repo sync completed."
-
           cd "$GITHUB_WORKSPACE/$CONFIG"
 
           if [ ! -d "common" ]; then
@@ -710,8 +737,6 @@ jobs:
             exit 0
           fi
 
-          echo "Missing Kleaf py3-cmd at: $PY3_CMD"
-
           if [ -d "$GNU_DIR/bin" ] && [ -f "$GNU_DIR/bin/py3-cmd" ]; then
             rm -rf "$MUSL_DIR"
             ln -s "$GNU_DIR" "$MUSL_DIR"
@@ -727,8 +752,6 @@ jobs:
           fi
 
           echo "Creating py3-cmd wrapper using system python3."
-
-          mkdir -p "$MUSL_DIR/bin"
 
           cat > "$PY3_CMD" <<'EOF'
           #!/usr/bin/env bash
@@ -842,100 +865,6 @@ jobs:
             echo "BUILD_HOST=ubuntu-build"
           } >> "$GITHUB_ENV"
 
-      - name: Detect Clang and Rust
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          KP="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
-
-          CLANG_FOUND=false
-          RUSTC_FOUND=false
-
-          for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
-            [ -d "$base/clang/host/linux-x86" ] || continue
-
-            latest="$(ls -d "$base"/clang/host/linux-x86/clang-r*/ 2>/dev/null | sort -V | tail -n1 || true)"
-
-            if [ -n "$latest" ] && [ -x "$latest/bin/clang" ]; then
-              CLANG_BIN="$latest/bin"
-              CLANG_FOUND=true
-              break
-            fi
-          done
-
-          for base in "$KP/prebuilts" "$KP/prebuilts-master"; do
-            [ -d "$base/rust/linux-x86/" ] || continue
-
-            latest="$(ls -d "$base/rust/linux-x86/1."* 2>/dev/null | sort -V | tail -n1 || true)"
-
-            if [ -n "$latest" ] && [ -x "$latest/bin/rustc" ]; then
-              RUSTC_BIN="$latest/bin"
-              RUSTC_FOUND=true
-              break
-            fi
-          done
-
-          if ! $CLANG_FOUND && command -v clang >/dev/null 2>&1; then
-            CLANG_BIN="$(dirname "$(command -v clang)")"
-            CLANG_FOUND=true
-          fi
-
-          if ! $CLANG_FOUND; then
-            echo "::error::No clang toolchain found"
-            exit 1
-          fi
-
-          CLANG_VERSION="$("$CLANG_BIN/clang" --version | head -n1)"
-
-          {
-            echo "CLANG_BIN_PATH=$CLANG_BIN"
-            echo "CLANG_VERSION=$CLANG_VERSION"
-          } >> "$GITHUB_ENV"
-
-          CLANG_ROOT="$(dirname "$CLANG_BIN")"
-
-          LIBCLANG_CANDIDATES=(
-            "$CLANG_ROOT/lib"
-            "$CLANG_ROOT/lib/x86_64-unknown-linux-gnu"
-            "$CLANG_ROOT/lib64"
-            "$CLANG_BIN/../lib"
-            "$CLANG_BIN/../lib/x86_64-unknown-linux-gnu"
-          )
-
-          for libdir in "${LIBCLANG_CANDIDATES[@]}"; do
-            if [ -f "$libdir/libclang.so" ] || ls "$libdir"/libclang.so.* >/dev/null 2>&1; then
-              {
-                echo "LIBCLANG_PATH=$libdir"
-                echo "BINDGEN_EXTRA_CLANG_ARGS=--target=aarch64-linux-gnu"
-              } >> "$GITHUB_ENV"
-              break
-            fi
-          done
-
-          if [ "$RUSTC_FOUND" = "true" ]; then
-            RUSTC_VERSION="$("$RUSTC_BIN/rustc" --version | head -n1)"
-
-            {
-              echo "RUSTC_BIN_PATH=$RUSTC_BIN"
-              echo "RUSTC_VERSION=$RUSTC_VERSION"
-              echo "RUSTC=$RUSTC_BIN/rustc"
-            } >> "$GITHUB_ENV"
-          fi
-
-      - name: Derive Clang short version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          short="$("${CLANG_BIN_PATH}/clang" --version | sed -n '1s/.*clang-r\([0-9.]\+\).*/\1/p')"
-
-          if [ -z "$short" ]; then
-            short="$("${CLANG_BIN_PATH}/clang" --version | sha256sum | cut -c1-8)"
-          fi
-
-          echo "CLANG_VERSION_SHORT=$short" >> "$GITHUB_ENV"
-
       - name: Set cache environment
         shell: bash
         run: |
@@ -955,9 +884,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
+          key: ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
           restore-keys: |
-            ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
             ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
             ccache-ksu-v7-
 
@@ -1284,12 +1212,6 @@ jobs:
 
           cd "$COMMON"
 
-          if [ "${ANDROID_VER:-}" = "android15" ] && [ "${KERNEL_VER:-}" = "6.6" ]; then
-            if ! grep -qxF '#include <trace/hooks/fs.h>' ./fs/namespace.c; then
-              sed -i '/#include <trace\/hooks\/blk.h>/a #include <trace\/hooks\/fs.h>' ./fs/namespace.c
-            fi
-          fi
-
           patch -p1 --forward < "$SUSFS_KERNEL_PATCH"
 
       - name: Apply KSU hooks
@@ -1345,16 +1267,6 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           CONFIG_KSU_SUSFS_SUS_SU=n
-          EOF
-          fi
-
-          if [ -n "${RUSTC_BIN_PATH:-}" ]; then
-            cat >> "$CONFIG_FILE" <<'EOF'
-          CONFIG_ANDROID_BINDER_IPC_RUST=y
-          CONFIG_CMDLINE="module_blacklist=rust_binder"
-          CONFIG_CMDLINE_EXTEND=y
-          CONFIG_CMDLINE_FORCE=n
-          CONFIG_RUST=y
           EOF
           fi
 
@@ -1870,10 +1782,6 @@ jobs:
           echo "KLEAF_PREBUILTS_OK=${KLEAF_PREBUILTS_OK:-unknown}"
 
           echo ""
-          echo "Global Git config:"
-          git config --global --list --show-origin || true
-
-          echo ""
           echo "Workspace directories:"
           find "$GITHUB_WORKSPACE" -maxdepth 3 -type d | sort | head -n 240 || true
 
@@ -1882,10 +1790,6 @@ jobs:
           find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -maxdepth 5 \
             \( -name "BUILD.bazel" -o -name "MODULE.bazel" -o -name "WORKSPACE" -o -name "WORKSPACE.bazel" -o -name "bazel" -o -name "py3-cmd" \) \
             -print 2>/dev/null | sort | head -n 240 || true
-
-          echo ""
-          echo "Bazel external directories:"
-          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform/external" -maxdepth 2 -type d -print 2>/dev/null | sort | head -n 240 || true
 
           echo ""
           echo "Reject files:"
