@@ -51,6 +51,16 @@ on:
           - O3
         default: O2
 
+      build_backend:
+        description: "Kernel build backend"
+        required: true
+        type: choice
+        options:
+          - bazel
+          - auto
+          - make
+        default: bazel
+
       clean_build:
         description: "Clean build without ccache"
         type: boolean
@@ -122,24 +132,30 @@ jobs:
           ksu_options_raw='${{ github.event.inputs.ksu_options }}'
 
           if ! ksu_options_normalized="$(echo "$ksu_options_raw" | jq -c '
-            map(
-              if .type then
-                .type |= ascii_upcase
-                | if .hash == null then
-                    if .type == "KSUN" then
-                      .hash = "next"
-                    elif .type == "KSU" then
-                      .hash = "main"
+            if type != "array" then
+              error("ksu_options must be a JSON array")
+            else
+              map(
+                if (.type | type) != "string" then
+                  error("Each KSU option must have a string type")
+                else
+                  .type |= ascii_upcase
+                  | if (.type != "KSUN" and .type != "KSU") then
+                      error("Unsupported KSU type: " + .type)
                     else
-                      .
+                      if .hash == null or .hash == "" then
+                        if .type == "KSUN" then
+                          .hash = "next"
+                        else
+                          .hash = "main"
+                        end
+                      else
+                        .
+                      end
                     end
-                  else
-                    .
-                  end
-              else
-                error("No type found")
-              end
-            )
+                end
+              )
+            end
           ' 2>&1)"; then
             echo "::error::ksu_options validation failed: $ksu_options_normalized"
             exit 1
@@ -203,7 +219,7 @@ jobs:
               ;;
             android*-*.*)
               IFS='-' read -r av kv <<< "$input"
-              jq_filter="map(select(.os_version == \"OOS15\" or .os_version == \"OOS16\")) | map(select(.android_version == \"$av\" and .kernel_version == \"$kv\"))"
+              jq_filter="map(select(.android_version == \"$av\" and .kernel_version == \"$kv\"))"
               ;;
             *)
               jq_filter="map(select(false))"
@@ -266,6 +282,8 @@ jobs:
             echo "**KSU config:** \`${{ inputs.ksu_options }}\`"
             echo ""
             echo "**Optimization:** \`${{ inputs.optimize_level }}\`"
+            echo ""
+            echo "**Build backend:** \`${{ inputs.build_backend }}\`"
             echo ""
             echo "**Clean build:** \`${{ inputs.clean_build }}\`"
             echo ""
@@ -397,23 +415,45 @@ jobs:
 
       - name: Export device config
         shell: bash
+        env:
+          MATRIX_MODEL: ${{ matrix.model }}
+          MATRIX_SOC: ${{ matrix.soc }}
+          MATRIX_BRANCH: ${{ matrix.branch }}
+          MATRIX_MANIFEST: ${{ matrix.manifest }}
+          MATRIX_ANDROID_VERSION: ${{ matrix.android_version }}
+          MATRIX_KERNEL_VERSION: ${{ matrix.kernel_version }}
+          MATRIX_OS_VERSION: ${{ matrix.os_version }}
+          MATRIX_HMBIRD: ${{ toJSON(matrix.hmbird) }}
+          MATRIX_SUSFS: ${{ toJSON(matrix.susfs) }}
+          MATRIX_BBG: ${{ toJSON(matrix.bbg) }}
+          MATRIX_BBR: ${{ toJSON(matrix.bbr) }}
+          MATRIX_TTL: ${{ toJSON(matrix.ttl) }}
+          MATRIX_IP_SET: ${{ toJSON(matrix.ip_set) }}
         run: |
           set -euo pipefail
 
+          bool_or_false() {
+            case "${1:-null}" in
+              true|false) printf '%s' "$1" ;;
+              null|'' ) printf 'false' ;;
+              *) printf 'false' ;;
+            esac
+          }
+
           jq -n \
-            --arg model "${{ matrix.model }}" \
-            --arg soc "${{ matrix.soc }}" \
-            --arg branch "${{ matrix.branch }}" \
-            --arg manifest "${{ matrix.manifest }}" \
-            --arg android_version "${{ matrix.android_version }}" \
-            --arg kernel_version "${{ matrix.kernel_version }}" \
-            --arg os_version "${{ matrix.os_version }}" \
-            --argjson hmbird "${{ matrix.hmbird }}" \
-            --argjson susfs "${{ matrix.susfs }}" \
-            --argjson bbg "${{ matrix.bbg }}" \
-            --argjson bbr "${{ matrix.bbr }}" \
-            --argjson ttl "${{ matrix.ttl }}" \
-            --argjson ip_set "${{ matrix.ip_set }}" \
+            --arg model "$MATRIX_MODEL" \
+            --arg soc "$MATRIX_SOC" \
+            --arg branch "$MATRIX_BRANCH" \
+            --arg manifest "$MATRIX_MANIFEST" \
+            --arg android_version "$MATRIX_ANDROID_VERSION" \
+            --arg kernel_version "$MATRIX_KERNEL_VERSION" \
+            --arg os_version "$MATRIX_OS_VERSION" \
+            --arg hmbird "$(bool_or_false "$MATRIX_HMBIRD")" \
+            --arg susfs "$(bool_or_false "$MATRIX_SUSFS")" \
+            --arg bbg "$(bool_or_false "$MATRIX_BBG")" \
+            --arg bbr "$(bool_or_false "$MATRIX_BBR")" \
+            --arg ttl "$(bool_or_false "$MATRIX_TTL")" \
+            --arg ip_set "$(bool_or_false "$MATRIX_IP_SET")" \
             '
             {
               model: $model,
@@ -423,12 +463,12 @@ jobs:
               android_version: $android_version,
               kernel_version: $kernel_version,
               os_version: $os_version,
-              hmbird: ($hmbird | tostring),
-              susfs: ($susfs | tostring),
-              bbg: ($bbg | tostring),
-              bbr: ($bbr | tostring),
-              ttl: ($ttl | tostring),
-              ip_set: ($ip_set | tostring)
+              hmbird: $hmbird,
+              susfs: $susfs,
+              bbg: $bbg,
+              bbr: $bbr,
+              ttl: $ttl,
+              ip_set: $ip_set
             }
             ' > /tmp/config.json
 
@@ -445,8 +485,8 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git curl ca-certificates build-essential clang lld flex bison \
             libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
-            libxml2-utils rsync unzip dwarves file python3 ccache jq bc \
-            dos2unix kmod libdw-dev elfutils zip wget gawk cpio
+            libxml2-utils rsync unzip dwarves file python3 python3-pip ccache jq bc \
+            dos2unix kmod libdw-dev elfutils zip wget gawk cpio patch
 
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* || true
@@ -625,10 +665,10 @@ jobs:
 
           echo "::group::Kleaf/Bazel prebuilts validation"
 
-          cd "$KERNEL_PATH"
-
           echo "Kernel platform: $KERNEL_PATH"
           echo "Expected py3-cmd: $PY3_CMD"
+
+          mkdir -p "$MUSL_DIR/bin"
 
           if [ -f "$PY3_CMD" ]; then
             chmod +x "$PY3_CMD" || true
@@ -638,10 +678,11 @@ jobs:
             exit 0
           fi
 
-          echo "::warning::Missing Kleaf py3-cmd at: $PY3_CMD"
+          echo "Missing Kleaf py3-cmd at: $PY3_CMD"
 
+          echo ""
           echo "Current prebuilts/build-tools layout:"
-          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 120 || true
+          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 160 || true
 
           echo ""
           echo "Attempt 1: repo sync prebuilts/build-tools if project exists."
@@ -649,8 +690,8 @@ jobs:
           cd "$GITHUB_WORKSPACE/$CONFIG"
 
           if [ -d ".repo" ]; then
-            if repo list 2>/dev/null | grep -qE '(^| )prebuilts/build-tools($| :)'; then
-              repo sync \
+            if "$REPO" list 2>/dev/null | awk '{print $1}' | grep -qx 'prebuilts/build-tools'; then
+              "$REPO" sync \
                 -c \
                 --force-sync \
                 --no-clone-bundle \
@@ -658,8 +699,17 @@ jobs:
                 --optimized-fetch \
                 -j"$(nproc --all)" \
                 prebuilts/build-tools || true
+            elif "$REPO" list 2>/dev/null | awk '{print $1}' | grep -qx 'kernel_platform/prebuilts/build-tools'; then
+              "$REPO" sync \
+                -c \
+                --force-sync \
+                --no-clone-bundle \
+                --no-tags \
+                --optimized-fetch \
+                -j"$(nproc --all)" \
+                kernel_platform/prebuilts/build-tools || true
             else
-              echo "::warning::repo list does not expose prebuilts/build-tools as a standalone project."
+              echo "repo list does not expose prebuilts/build-tools as a standalone project."
             fi
           fi
 
@@ -672,14 +722,14 @@ jobs:
           fi
 
           echo ""
-          echo "Attempt 2: if linux-x86 build-tools exists, create linux_musl-x86 compatibility symlink."
+          echo "Attempt 2: create linux_musl-x86 compatibility symlink from linux-x86."
 
           if [ -d "$GNU_DIR/bin" ] && [ -f "$GNU_DIR/bin/py3-cmd" ]; then
             rm -rf "$MUSL_DIR"
             ln -s "$GNU_DIR" "$MUSL_DIR"
             chmod +x "$PY3_CMD" || true
 
-            if [ -f "$PY3_CMD" ]; then
+            if [ -x "$PY3_CMD" ]; then
               echo "Created compatibility symlink:"
               echo "$MUSL_DIR -> $GNU_DIR"
               echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
@@ -709,16 +759,38 @@ jobs:
               exit 0
             fi
           else
-            echo "::warning::Could not clone Android prebuilts/build-tools."
+            echo "Could not clone Android prebuilts/build-tools."
           fi
 
-          echo "::warning::Kleaf build-tools are still incomplete. Bazel will be disabled for this target."
+          echo ""
+          echo "Attempt 4: create py3-cmd wrapper using system python3."
+
+          mkdir -p "$MUSL_DIR/bin"
+
+          cat > "$PY3_CMD" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec python3 "$@"
+          EOF
+
+          chmod +x "$PY3_CMD"
+
+          if [ -x "$PY3_CMD" ] && python3 --version >/dev/null 2>&1; then
+            echo "Created py3-cmd wrapper backed by system python3."
+            echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "::error::Kleaf build-tools are incomplete and py3-cmd could not be repaired."
           echo "KLEAF_PREBUILTS_OK=false" >> "$GITHUB_ENV"
 
+          echo ""
           echo "Final prebuilts/build-tools layout:"
-          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 120 || true
+          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 180 || true
 
           echo "::endgroup::"
+          exit 1
 
       - name: Repair Bazel external repositories
         shell: bash
@@ -735,23 +807,35 @@ jobs:
           clone_if_missing() {
             local path="$1"
             local url="$2"
+            local ref="${3:-}"
 
             if [ -d "$path" ] && [ "$(find "$path" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
               echo "Already exists: $path"
               return 0
             fi
 
-            echo "Cloning $url -> $path"
+            echo "Cloning missing Bazel repository:"
+            echo "  URL:  $url"
+            echo "  Path: $path"
+
             rm -rf "$path"
-            git clone --depth=1 "$url" "$path"
+
+            if [ -n "$ref" ]; then
+              git clone --depth=1 --branch "$ref" "$url" "$path"
+            else
+              git clone --depth=1 "$url" "$path"
+            fi
           }
 
           clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_python" "https://github.com/bazelbuild/rules_python.git"
           clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_cc" "https://github.com/bazelbuild/rules_cc.git"
           clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_pkg" "https://github.com/bazelbuild/rules_pkg.git"
+          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_java" "https://github.com/bazelbuild/rules_java.git"
           clone_if_missing "$EXTERNAL_DIR/bazel-skylib" "https://github.com/bazelbuild/bazel-skylib.git"
 
-          find "$EXTERNAL_DIR" -maxdepth 2 -type d | sort | sed -n '1,120p'
+          echo ""
+          echo "Bazel external repository layout:"
+          find "$EXTERNAL_DIR" -maxdepth 2 -type d | sort | sed -n '1,180p'
 
           echo "::endgroup::"
 
@@ -781,11 +865,23 @@ jobs:
           done
 
           if [ -z "$BRANCH_LINE" ]; then
-            echo "::warning::No BRANCH= found in config files. Falling back to matrix values."
+            echo "No BRANCH= found in config files. Falling back to matrix values."
             ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
           else
             BRANCH_VALUE="${BRANCH_LINE#*=}"
-            ANDROID_VERSION="${BRANCH_VALUE%-*}"
+
+            case "$BRANCH_VALUE" in
+              android[0-9]*-*)
+                ANDROID_VERSION="$(echo "$BRANCH_VALUE" | grep -oE '^android[0-9]+' || true)"
+                ;;
+              *)
+                ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
+                ;;
+            esac
+
+            if [ -z "$ANDROID_VERSION" ]; then
+              ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
+            fi
           fi
 
           VERSION="$(grep '^VERSION *=' Makefile | awk '{print $3}')"
@@ -807,7 +903,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
           if [ "$OP_SUSFS" = "true" ]; then
-            echo "SUSFS_KERNEL_BRANCH=gki-$ANDROID_VERSION-$VERSION.$PATCHLEVEL" >> "$GITHUB_ENV"
+            echo "SUSFS_KERNEL_BRANCH=gki-${OP_ANDROID_VERSION}-${OP_KERNEL_VERSION}" >> "$GITHUB_ENV"
           fi
 
       - name: Set build identity
@@ -932,7 +1028,7 @@ jobs:
         if: ${{ inputs.clean_build != true }}
         uses: actions/cache@v4
         with:
-          path: ${{ env.CCACHE_DIR }}
+          path: ~/.ccache
           key: ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
           restore-keys: |
             ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
@@ -947,11 +1043,11 @@ jobs:
             ${{ env.BAZELISK_HOME }}
             ~/.cache/bazel
             ~/.cache/bazelisk
-          key: bazel-kleaf-v2-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
+          key: bazel-kleaf-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
           restore-keys: |
-            bazel-kleaf-v2-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
-            bazel-kleaf-v2-${{ env.OP_MODEL }}-
-            bazel-kleaf-v2-
+            bazel-kleaf-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
+            bazel-kleaf-v3-${{ env.OP_MODEL }}-
+            bazel-kleaf-v3-
 
       - name: Configure ccache
         if: ${{ inputs.clean_build != true }}
@@ -1002,7 +1098,7 @@ jobs:
               ["android16-6.12"]="gki-android16-6.12"
             )
 
-            KERNEL_KEY="${ANDROID_VER}-${KERNEL_VER}"
+            KERNEL_KEY="${OP_ANDROID_VERSION}-${OP_KERNEL_VERSION}"
 
             if [ -z "$SUSFS_INPUT" ] || [ "$SUSFS_INPUT" = "next" ]; then
               SUSFS_BRANCH="${DEFAULT_SUSFS[$KERNEL_KEY]:-gki-android15-6.6}"
@@ -1079,7 +1175,7 @@ jobs:
           cd "$CONFIG/kernel_platform"
 
           if ! wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash; then
-            echo "::warning::BBG setup script failed, continuing"
+            echo "BBG setup script failed, continuing"
           fi
 
           echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
@@ -1397,7 +1493,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build kernel with Bazel/Kleaf fallback
+      - name: Build kernel with Bazel/Kleaf
         id: build_kernel
         shell: bash
         env:
@@ -1409,6 +1505,7 @@ jobs:
 
           KERNEL_PATH="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
           COMMON="$KERNEL_PATH/common"
+          BUILD_BACKEND="${{ inputs.build_backend }}"
 
           cd "$KERNEL_PATH"
 
@@ -1449,7 +1546,7 @@ jobs:
           export SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
 
-          BASE_PATH="/usr/lib/ccache:${CLANG_BIN_PATH}:${KERNEL_PATH}/prebuilts/kernel-build-tools/linux-x86/bin/"
+          BASE_PATH="/usr/lib/ccache:${CLANG_BIN_PATH}:${KERNEL_PATH}/prebuilts/kernel-build-tools/linux-x86/bin:${KERNEL_PATH}/prebuilts/build-tools/linux_musl-x86/bin:${KERNEL_PATH}/prebuilts/build-tools/linux-x86/bin"
 
           if [ -n "${RUSTC_BIN_PATH:-}" ]; then
             export PATH="${BASE_PATH}:${RUSTC_BIN_PATH}:${PATH}"
@@ -1488,6 +1585,7 @@ jobs:
           BUILD_START="$(date +%s)"
           BUILD_METHOD="unknown"
 
+          echo "Requested build backend: $BUILD_BACKEND"
           echo "Kernel platform path: $KERNEL_PATH"
           echo "Common path: $COMMON"
           echo "Final KCFLAGS=$KCFLAGS"
@@ -1495,17 +1593,31 @@ jobs:
 
           build_with_bazel=false
           BAZEL_TARGET=""
-
+          BAZEL_QUERY_LOG="$KERNEL_PATH/bazel_targets.log"
+          BAZEL_QUERY_ERRORS="$KERNEL_PATH/bazel_query_errors.log"
           KLEAF_PY3_CMD="$KERNEL_PATH/prebuilts/build-tools/linux_musl-x86/bin/py3-cmd"
 
-          if [ -x "$KERNEL_PATH/tools/bazel" ] && [ "${KLEAF_PREBUILTS_OK:-false}" = "true" ] && [ -f "$KLEAF_PY3_CMD" ]; then
-            chmod +x "$KLEAF_PY3_CMD" || true
-            build_with_bazel=true
+          if [ "$BUILD_BACKEND" = "make" ]; then
+            echo "Build backend is make. Skipping Bazel."
+            build_with_bazel=false
           else
-            echo "::warning::Bazel/Kleaf wrapper exists but prerequisites are incomplete."
-            echo "tools/bazel exists: $([ -x "$KERNEL_PATH/tools/bazel" ] && echo yes || echo no)"
-            echo "KLEAF_PREBUILTS_OK=${KLEAF_PREBUILTS_OK:-unset}"
-            echo "py3-cmd exists: $([ -f "$KLEAF_PY3_CMD" ] && echo yes || echo no)"
+            if [ -x "$KERNEL_PATH/tools/bazel" ] && [ "${KLEAF_PREBUILTS_OK:-false}" = "true" ] && [ -x "$KLEAF_PY3_CMD" ]; then
+              chmod +x "$KERNEL_PATH/tools/bazel" || true
+              chmod +x "$KLEAF_PY3_CMD" || true
+              build_with_bazel=true
+            else
+              echo "Bazel/Kleaf prerequisites are incomplete."
+              echo "tools/bazel executable: $([ -x "$KERNEL_PATH/tools/bazel" ] && echo yes || echo no)"
+              echo "KLEAF_PREBUILTS_OK=${KLEAF_PREBUILTS_OK:-unset}"
+              echo "py3-cmd executable: $([ -x "$KLEAF_PY3_CMD" ] && echo yes || echo no)"
+
+              if [ "$BUILD_BACKEND" = "bazel" ]; then
+                echo "::error::Bazel was requested, but prerequisites are incomplete."
+                exit 1
+              fi
+
+              build_with_bazel=false
+            fi
           fi
 
           if [ "$build_with_bazel" = "true" ]; then
@@ -1516,19 +1628,23 @@ jobs:
               BAZEL_JOBS=10
             fi
 
-            BAZEL_QUERY_LOG="$KERNEL_PATH/bazel_targets.log"
-
             echo "Running Bazel query..."
 
             set +e
-            "$KERNEL_PATH/tools/bazel" query '//...:*' > "$BAZEL_QUERY_LOG" 2>"$KERNEL_PATH/bazel_query_errors.log"
+            "$KERNEL_PATH/tools/bazel" query '//...:*' > "$BAZEL_QUERY_LOG" 2>"$BAZEL_QUERY_ERRORS"
             BAZEL_QUERY_STATUS="$?"
             set -e
 
             if [ "$BAZEL_QUERY_STATUS" -ne 0 ]; then
-              echo "::warning::Bazel query failed with status $BAZEL_QUERY_STATUS."
+              echo "Bazel query failed with status $BAZEL_QUERY_STATUS."
               echo "Bazel query errors:"
-              sed -n '1,160p' "$KERNEL_PATH/bazel_query_errors.log" || true
+              sed -n '1,260p' "$BAZEL_QUERY_ERRORS" || true
+
+              if [ "$BUILD_BACKEND" = "bazel" ]; then
+                echo "::error::Bazel was requested, but Bazel query failed."
+                exit 1
+              fi
+
               build_with_bazel=false
             fi
           fi
@@ -1540,8 +1656,8 @@ jobs:
             candidate_targets=(
               "//common:kernel_aarch64_dist"
               "//common:kernel_aarch64"
-              "//common:kernel_aarch64_dist_dist"
               "//common:kernel_aarch64_abi_dist"
+              "//common:kernel_aarch64_modules"
               "//msm-kernel:kernel_aarch64_dist"
               "//msm-kernel:kernel_aarch64"
               "//kernel_platform:kernel_aarch64_dist"
@@ -1559,8 +1675,8 @@ jobs:
 
             if [ -z "$BAZEL_TARGET" ]; then
               BAZEL_TARGET="$(
-                grep -Ei '(kernel.*aarch64.*dist|aarch64.*kernel.*dist|kernel_aarch64.*dist|gki.*aarch64.*dist|aarch64.*dist)' "$BAZEL_QUERY_LOG" \
-                  | grep -Ev '(headers|uapi|modules_prepare|config|abi_update|abi_dump|test)' \
+                grep -Ei '(^//.*:(.*kernel.*aarch64.*dist|.*aarch64.*kernel.*dist|kernel_aarch64_dist|.*gki.*aarch64.*dist|.*aarch64.*dist)$)' "$BAZEL_QUERY_LOG" \
+                  | grep -Eiv '(headers|uapi|modules_prepare|config|abi_update|abi_dump|test|docs|toolchain|host)' \
                   | head -n1 || true
               )"
 
@@ -1570,8 +1686,15 @@ jobs:
             fi
 
             if [ -z "$BAZEL_TARGET" ]; then
-              echo "::warning::No suitable Bazel kernel image/dist target found. Will fall back to Make."
-              sed -n '1,100p' "$BAZEL_QUERY_LOG" || true
+              echo "No suitable Bazel kernel image/dist target found."
+              echo "First Bazel targets:"
+              sed -n '1,220p' "$BAZEL_QUERY_LOG" || true
+
+              if [ "$BUILD_BACKEND" = "bazel" ]; then
+                echo "::error::Bazel was requested, but no kernel Bazel target was found."
+                exit 1
+              fi
+
               build_with_bazel=false
             fi
           fi
@@ -1595,6 +1718,9 @@ jobs:
               --action_env=KBUILD_BUILD_USER="${KBUILD_BUILD_USER}"
               --action_env=KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST}"
               --action_env=KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION}"
+              --action_env=LIBCLANG_PATH="${LIBCLANG_PATH:-}"
+              --action_env=BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-}"
+              --action_env=RUSTC="${RUSTC:-}"
             )
 
             echo "Building Bazel target: $BAZEL_TARGET"
@@ -1604,15 +1730,30 @@ jobs:
             if "$KERNEL_PATH/tools/bazel" build "${BAZEL_ARGS[@]}" "$BAZEL_TARGET" 2>&1 | tee "$KERNEL_PATH/build.log"; then
               BUILD_METHOD="bazel"
             else
-              echo "::warning::Bazel build failed. Falling back to Make build."
+              if [ "$BUILD_BACKEND" = "bazel" ]; then
+                echo "::error::Bazel was requested, but Bazel build failed."
+                exit 1
+              fi
+
+              echo "Bazel build failed. Falling back to Make build because build_backend=$BUILD_BACKEND."
               BUILD_METHOD="make-fallback"
             fi
           else
-            echo "Bazel/Kleaf not detected or unavailable. Using Make build."
+            if [ "$BUILD_BACKEND" = "bazel" ]; then
+              echo "::error::Bazel was requested, but build_with_bazel=false."
+              exit 1
+            fi
+
+            echo "Using Make build because build_backend=$BUILD_BACKEND."
             BUILD_METHOD="make"
           fi
 
           if [ "$BUILD_METHOD" = "make" ] || [ "$BUILD_METHOD" = "make-fallback" ]; then
+            if [ "$BUILD_BACKEND" = "bazel" ]; then
+              echo "::error::Internal error: Make fallback reached while build_backend=bazel."
+              exit 1
+            fi
+
             cd "$COMMON"
 
             if [ -d gki/aarch64/symbols ]; then
@@ -1685,7 +1826,14 @@ jobs:
 
           IMAGE_PATH_FOUND="$(
             find "$KERNEL_PATH" \
-              \( -path "*/dist/Image" -o -path "*/kernel_aarch64/Image" -o -path "*/out/arch/arm64/boot/Image" -o -name "Image" \) \
+              \( \
+                -path "*/bazel-bin/*/Image" \
+                -o -path "*/bazel-bin/*/dist/Image" \
+                -o -path "*/dist/Image" \
+                -o -path "*/kernel_aarch64/Image" \
+                -o -path "*/out/arch/arm64/boot/Image" \
+                -o -name "Image" \
+              \) \
               -type f \
               -printf '%T@ %p\n' 2>/dev/null \
               | sort -rn \
@@ -1695,7 +1843,7 @@ jobs:
 
           if [ -z "$IMAGE_PATH_FOUND" ] || [ ! -f "$IMAGE_PATH_FOUND" ]; then
             echo "::error::Kernel Image missing"
-            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 50 || true
+            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 80 || true
             exit 1
           fi
 
@@ -1751,7 +1899,14 @@ jobs:
           if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
             IMG="$(
               find "$KERNEL_PATH" \
-                \( -path "*/dist/Image" -o -path "*/kernel_aarch64/Image" -o -path "*/out/arch/arm64/boot/Image" -o -name "Image" \) \
+                \( \
+                  -path "*/bazel-bin/*/Image" \
+                  -o -path "*/bazel-bin/*/dist/Image" \
+                  -o -path "*/dist/Image" \
+                  -o -path "*/kernel_aarch64/Image" \
+                  -o -path "*/out/arch/arm64/boot/Image" \
+                  -o -name "Image" \
+                \) \
                 -type f \
                 -printf '%T@ %p\n' 2>/dev/null \
                 | sort -rn \
@@ -1762,7 +1917,7 @@ jobs:
 
           if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
             echo "::error::Kernel Image not found"
-            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 50 || true
+            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 80 || true
             exit 1
           fi
 
@@ -1864,6 +2019,7 @@ jobs:
             echo "| Android | ${ANDROID_VER:-unknown} |"
             echo "| Kernel Base | ${KERNEL_VER:-unknown} |"
             echo "| Kernel Full | ${KERNEL_FULL_VER:-unknown} |"
+            echo "| Requested Backend | ${{ inputs.build_backend }} |"
             echo "| Build Method | ${BUILD_METHOD:-unknown} |"
             echo "| Kernel Uname | \`${KERNEL_UNAME:-unknown}\` |"
             echo "| KSU Type | ${{ matrix.ksu_type }} |"
@@ -1921,8 +2077,12 @@ jobs:
           echo ""
           echo "Bazel/Kleaf files:"
           find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -maxdepth 5 \
-            \( -name "BUILD.bazel" -o -name "MODULE.bazel" -o -name "bazel" -o -name "py3-cmd" \) \
-            -print 2>/dev/null | sort | head -n 150 || true
+            \( -name "BUILD.bazel" -o -name "MODULE.bazel" -o -name "WORKSPACE" -o -name "WORKSPACE.bazel" -o -name "bazel" -o -name "py3-cmd" \) \
+            -print 2>/dev/null | sort | head -n 200 || true
+
+          echo ""
+          echo "Bazel external directories:"
+          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform/external" -maxdepth 2 -type d -print 2>/dev/null | sort | head -n 200 || true
 
           echo ""
           echo "Image candidates:"
@@ -2046,6 +2206,7 @@ jobs:
           |----------|-------|
           | Target | \`${{ inputs.op_model }}\` |
           | Optimization | \`${{ inputs.optimize_level }}\` |
+          | Build Backend | \`${{ inputs.build_backend }}\` |
           | Clean Build | \`${{ inputs.clean_build }}\` |
           | ZIP Count | \`$ZIP_COUNT\` |
 
@@ -2075,6 +2236,8 @@ jobs:
 
           Built automatically with GitHub Actions.
           EOF
+
+          sed -i 's/^[[:space:]]\{10\}//' release_notes.md
 
           cat release_notes.md
 
