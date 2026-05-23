@@ -654,8 +654,12 @@ jobs:
 
           echo "::group::Install bindgen"
 
-          cargo +nightly install bindgen-cli --version 0.69.5 --locked || \
-          cargo +nightly install bindgen-cli --version 0.69.5
+          if command -v bindgen >/dev/null 2>&1; then
+            echo "bindgen already installed:"
+            bindgen --version
+          else
+            cargo +nightly install bindgen-cli --version 0.69.5
+          fi
 
           echo "bindgen version:"
           bindgen --version
@@ -764,8 +768,8 @@ jobs:
           fi
 
           echo ""
-          echo "Resolved repo manifest preview:"
-          "$REPO" manifest -r | sed -n '1,160p' || true
+          echo "Repo manifest preview before sync:"
+          "$REPO" manifest | sed -n '1,160p' || true
 
           success=false
 
@@ -793,6 +797,12 @@ jobs:
             echo "::error::repo sync failed after 3 attempts"
             exit 1
           fi
+
+          echo ""
+          echo "Resolved repo manifest preview after sync:"
+          "$REPO" manifest -r | sed -n '1,160p' || true
+
+          rm -rf AnyKernel3 || true
 
           echo "::endgroup::"
 
