@@ -1060,34 +1060,84 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "::group::Add KernelSU Next"
+
           cd "$CONFIG/kernel_platform"
 
-          if [ "${{ matrix.ksu_hash }}" = "" ]; then
+          KSU_INPUT="${{ matrix.ksu_hash }}"
+
+          echo "Adding KernelSU Next..."
+          echo "Requested KSUN ref: ${KSU_INPUT:-next/default}"
+
+          if [ -z "$KSU_INPUT" ] || [ "$KSU_INPUT" = "next" ]; then
             curl --fail --location --proto '=https' -LSs \
               "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
           else
             curl --fail --location --proto '=https' -LSs \
-              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "${{ matrix.ksu_hash }}"
+              "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "$KSU_INPUT"
           fi
 
           git submodule update --init --recursive
 
+          if [ ! -d KernelSU-Next/kernel ]; then
+            echo "::error::KernelSU-Next/kernel directory not found"
+            find . -maxdepth 3 -type d | sort || true
+            exit 1
+          fi
+
           cd KernelSU-Next/kernel
 
-          BASE_VERSION=10200
-          KSU_VERSION="$(expr "$(/usr/bin/git rev-list --count HEAD)" + "$BASE_VERSION")"
+          COMMITS_COUNT="$(/usr/bin/git rev-list --count HEAD)"
+
+          if [ "$COMMITS_COUNT" -lt 2684 ]; then
+            BASE_VERSION=10200
+          else
+            BASE_VERSION=30000
+          fi
+
+          KSU_VERSION="$(expr "$COMMITS_COUNT" + "$BASE_VERSION")"
+
+          echo "KernelSU Next commits: $COMMITS_COUNT"
+          echo "KernelSU Next base version: $BASE_VERSION"
+          echo "KernelSU Next version: $KSU_VERSION"
 
           sed -i "s/DKSU_VERSION=11998/DKSU_VERSION=${KSU_VERSION}/" Makefile || true
+
+          if [ -f ksu.c ]; then
+            sed -i 's/#if defined(CONFIG_STACKPROTECTOR) && (defined(CONFIG_ARM64) && !defined(CONFIG_STACKPROTECTOR_PER_TASK))/#if 0/' ksu.c || true
+          fi
+
+          if [[ "$KSU_VERSION" -gt 33095 ]] && [[ "${KERNEL_VER:-}" == "6.12" ]]; then
+            echo "Applying KernelSU Next 6.12 Kbuild compatibility fixes"
+
+            if [ -f Kbuild ]; then
+              sed -i 's|ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include|ccflags-y += -I$(KSU_KERNEL_DIR) -I$(KSU_KERNEL_DIR)/include -I$(KSU_KERNEL_DIR)/include/uapi|' Kbuild || true
+              sed -i 's|$(src)|$(abspath $(src))|' Kbuild || true
+              sed -i 's|$(srctree)/$(src)|$(abspath $(srctree)/$(src))|' Kbuild || true
+            else
+              echo "::warning::KernelSU-Next/kernel/Kbuild not found, skipping 6.12 Kbuild fixes"
+            fi
+          fi
+
+          if [ "$KSU_VERSION" -lt 12884 ]; then
+            echo "NEED_HOOKS=true" >> "$GITHUB_ENV"
+          else
+            echo "NEED_HOOKS=false" >> "$GITHUB_ENV"
+          fi
 
           cd ..
 
           KSU_COMMIT_SHA="$(git rev-parse HEAD)"
 
           {
-            echo "NEED_HOOKS=true"
             echo "KSU_COMMIT_SHA=$KSU_COMMIT_SHA"
             echo "KSUVER=$KSU_VERSION"
           } >> "$GITHUB_ENV"
+
+          echo "KernelSU Next commit: $KSU_COMMIT_SHA"
+          echo "KernelSU Next Version: $KSU_VERSION"
+
+          echo "::endgroup::"
 
       - name: Add KernelSU
         if: ${{ matrix.ksu_type == 'KSU' }}
