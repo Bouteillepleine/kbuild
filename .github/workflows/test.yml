@@ -327,9 +327,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           curl -L -o util_free_space.sh https://raw.githubusercontent.com/apache/arrow/main/ci/scripts/util_free_space.sh
           chmod +x util_free_space.sh
           ./util_free_space.sh || true
+
           df -h
 
       - name: Checkout repository
@@ -476,6 +478,56 @@ jobs:
 
           jq '.' /tmp/config.json
 
+      - name: Resolve Bazel common kernel branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BAZEL_COMMON_BRANCH=""
+
+          if [ "$OP_ANDROID_VERSION" = "android16" ] && [ "$OP_KERNEL_VERSION" = "6.12" ]; then
+            case "$OP_MODEL" in
+              OP15|OnePlus15|oneplus15)
+                BAZEL_COMMON_BRANCH="android16-6.12-2025-06"
+                ;;
+              OP15T|OnePlus15T|oneplus15t)
+                BAZEL_COMMON_BRANCH="android16-6.12-2025-06"
+                ;;
+              OP15r|OP15R|OnePlus15R|oneplus15r|OP-ACE-6T|ACE6T|Ace6T|ace6t|OPACE6T)
+                BAZEL_COMMON_BRANCH="android16-6.12-2025-09"
+                ;;
+              *)
+                if [ "${OP_SOC:-}" = "sm8850" ] || [ "${OP_SOC:-}" = "pineapple" ]; then
+                  BAZEL_COMMON_BRANCH="android16-6.12-2025-06"
+                elif [ "${OP_SOC:-}" = "sm8845" ] || [ "${OP_SOC:-}" = "canoe" ] || [ "${OP_SOC:-}" = "aston" ]; then
+                  BAZEL_COMMON_BRANCH="android16-6.12-2025-09"
+                else
+                  BAZEL_COMMON_BRANCH="android16-6.12-2025-09"
+                fi
+                ;;
+            esac
+          elif [ "$OP_ANDROID_VERSION" = "android15" ] && [ "$OP_KERNEL_VERSION" = "6.6" ]; then
+            BAZEL_COMMON_BRANCH="android15-6.6"
+          elif [ "$OP_ANDROID_VERSION" = "android14" ] && [ "$OP_KERNEL_VERSION" = "6.1" ]; then
+            BAZEL_COMMON_BRANCH="android14-6.1"
+          elif [ "$OP_ANDROID_VERSION" = "android13" ] && [ "$OP_KERNEL_VERSION" = "5.15" ]; then
+            BAZEL_COMMON_BRANCH="android13-5.15"
+          elif [ "$OP_ANDROID_VERSION" = "android12" ] && [ "$OP_KERNEL_VERSION" = "5.10" ]; then
+            BAZEL_COMMON_BRANCH="android12-5.10"
+          fi
+
+          if [ -z "$BAZEL_COMMON_BRANCH" ]; then
+            echo "::error::No Bazel common branch mapping for ${OP_MODEL} ${OP_ANDROID_VERSION}-${OP_KERNEL_VERSION}"
+            exit 1
+          fi
+
+          {
+            echo "BAZEL_COMMON_BRANCH=$BAZEL_COMMON_BRANCH"
+            echo "BAZEL_MANIFEST_BRANCH=common-$BAZEL_COMMON_BRANCH"
+          } >> "$GITHUB_ENV"
+
+          echo "Bazel manifest branch: common-$BAZEL_COMMON_BRANCH"
+
       - name: Install dependencies
         shell: bash
         run: |
@@ -490,33 +542,6 @@ jobs:
 
           sudo apt-get clean
           sudo rm -rf /var/lib/apt/lists/* /var/cache/apt/* || true
-
-      - name: Setup Rust toolchains
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rustup toolchain install 1.82.0 --profile minimal
-          rustup toolchain install nightly --profile minimal
-          rustup default 1.82.0
-
-          rustc --version
-          cargo --version
-          rustc +nightly --version
-          cargo +nightly --version
-
-      - name: Install bindgen
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if command -v bindgen >/dev/null 2>&1; then
-            bindgen --version
-          else
-            cargo +nightly install bindgen-cli --version 0.69.5
-          fi
-
-          bindgen --version
 
       - name: Setup base environment
         shell: bash
@@ -539,6 +564,8 @@ jobs:
           git config --global user.email "oneplus@example.com"
           git config --global advice.detachedHead false
 
+          "$REPO" version || true
+
       - name: Configure GitHub HTTPS authentication
         shell: bash
         env:
@@ -560,95 +587,100 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "::group::Initialize kernel source"
+          echo "::group::Initialize Bazel/Kleaf kernel source"
 
+          rm -rf "$CONFIG"
           mkdir -p "$CONFIG"
           cd "$CONFIG"
 
-          REPO_REV="stable"
-          BOOTSTRAP_BRANCH="oneplus/sm8650"
-
           echo "OP_MODEL=$OP_MODEL"
-          echo "OP_BRANCH=$OP_BRANCH"
-          echo "OP_MANIFEST=$OP_MANIFEST"
-          echo "OP_OS_VERSION=$OP_OS_VERSION"
+          echo "OP_SOC=$OP_SOC"
+          echo "OP_ANDROID_VERSION=$OP_ANDROID_VERSION"
+          echo "OP_KERNEL_VERSION=$OP_KERNEL_VERSION"
+          echo "BAZEL_MANIFEST_BRANCH=${BAZEL_MANIFEST_BRANCH:-unset}"
 
-          if [[ "$OP_MANIFEST" == https://* ]]; then
-            mkdir -p .repo/manifests
-
-            curl --fail --show-error --location --proto '=https' \
-              "$OP_MANIFEST" \
-              -o .repo/manifests/temp_manifest.xml
-
-          elif [[ "$OP_BRANCH" == wild/* ]]; then
-            mkdir -p .repo/manifests
-
-            MANIFEST_DIR="$(echo "$OP_OS_VERSION" | tr '[:upper:]' '[:lower:]')"
-            MANIFEST_PATH="../manifests/$MANIFEST_DIR/$OP_MANIFEST"
-
-            if [ ! -f "$MANIFEST_PATH" ]; then
-              echo "::error::Manifest file not found: $MANIFEST_PATH"
-              find ../manifests -maxdepth 4 -type f | sort || true
-              exit 1
-            fi
-
-            cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
-
-          else
-            "$REPO" init \
-              -u https://github.com/OnePlusOSS/kernel_manifest.git \
-              -b "$OP_BRANCH" \
-              -m "$OP_MANIFEST" \
-              --repo-rev="$REPO_REV" \
-              --depth=1 \
-              --no-clone-bundle \
-              --no-tags \
-              -v
-
-            skip_temp_init=true
-          fi
-
-          if [ "${skip_temp_init:-false}" != "true" ]; then
-            "$REPO" init \
-              -u https://github.com/OnePlusOSS/kernel_manifest.git \
-              -b "$BOOTSTRAP_BRANCH" \
-              -m temp_manifest.xml \
-              --repo-rev="$REPO_REV" \
-              --depth=1 \
-              --no-clone-bundle \
-              --no-tags \
-              -v
-          fi
-
-          success=false
-
-          for i in 1 2 3; do
-            echo "repo sync attempt $i..."
-
-            if "$REPO" sync \
-              -c \
-              --force-sync \
-              -v \
-              --no-clone-bundle \
-              --no-tags \
-              --optimized-fetch \
-              -j"$(nproc --all)" \
-              --fail-fast; then
-              success=true
-              break
-            fi
-
-            sleep 30
-          done
-
-          if [ "$success" != "true" ]; then
-            echo "::error::repo sync failed after 3 attempts"
+          if [ -z "${BAZEL_MANIFEST_BRANCH:-}" ]; then
+            echo "::error::BAZEL_MANIFEST_BRANCH is not set"
             exit 1
           fi
 
-          "$REPO" manifest -r | sed -n '1,160p' || true
+          retry_command() {
+            local max_attempts=3
+            local timeout_s=10
+            local attempt=1
 
-          rm -rf AnyKernel3 || true
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "Attempt $attempt/$max_attempts: $*"
+
+              if "$@"; then
+                return 0
+              fi
+
+              sleep "$timeout_s"
+              timeout_s=$((timeout_s * 2))
+              attempt=$((attempt + 1))
+            done
+
+            return 1
+          }
+
+          echo "Initializing Android common kernel manifest: $BAZEL_MANIFEST_BRANCH"
+
+          retry_command "$REPO" init \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$BAZEL_MANIFEST_BRANCH" \
+            --depth=1 \
+            --no-clone-bundle \
+            --no-tags
+
+          SYNC_JOBS="$(nproc --all)"
+          if [ "$SYNC_JOBS" -gt 8 ]; then
+            SYNC_JOBS=8
+          fi
+
+          echo "Syncing Android common kernel source with $SYNC_JOBS jobs"
+
+          retry_command "$REPO" sync \
+            -c \
+            -j"$SYNC_JOBS" \
+            --prune \
+            --no-clone-bundle \
+            --no-tags \
+            --force-sync \
+            --current-branch \
+            --optimized-fetch
+
+          echo "Repo sync completed."
+
+          cd "$GITHUB_WORKSPACE/$CONFIG"
+
+          if [ ! -d "common" ]; then
+            echo "::error::common directory not found after sync"
+            find . -maxdepth 3 -type d | sort | sed -n '1,160p'
+            exit 1
+          fi
+
+          rm -rf kernel_platform
+          ln -s . kernel_platform
+
+          echo "Created compatibility symlink: $CONFIG/kernel_platform -> ."
+
+          if [ ! -x "$GITHUB_WORKSPACE/$CONFIG/kernel_platform/tools/bazel" ]; then
+            echo "::error::tools/bazel not found or not executable"
+            find "$GITHUB_WORKSPACE/$CONFIG" -maxdepth 4 \( -name bazel -o -name BUILD.bazel -o -name MODULE.bazel \) -print | sort
+            exit 1
+          fi
+
+          chmod +x "$GITHUB_WORKSPACE/$CONFIG/kernel_platform/tools/bazel" || true
+
+          if [ -f common/BUILD.bazel ]; then
+            sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' common/BUILD.bazel || true
+            sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' common/BUILD.bazel || true
+          fi
+
+          rm -f common/android/abi_gki_protected_exports_* 2>/dev/null || true
+
+          "$REPO" manifest -r | sed -n '1,180p' || true
 
           echo "::endgroup::"
 
@@ -680,50 +712,6 @@ jobs:
 
           echo "Missing Kleaf py3-cmd at: $PY3_CMD"
 
-          echo ""
-          echo "Current prebuilts/build-tools layout:"
-          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 160 || true
-
-          echo ""
-          echo "Attempt 1: repo sync prebuilts/build-tools if project exists."
-
-          cd "$GITHUB_WORKSPACE/$CONFIG"
-
-          if [ -d ".repo" ]; then
-            if "$REPO" list 2>/dev/null | awk '{print $1}' | grep -qx 'prebuilts/build-tools'; then
-              "$REPO" sync \
-                -c \
-                --force-sync \
-                --no-clone-bundle \
-                --no-tags \
-                --optimized-fetch \
-                -j"$(nproc --all)" \
-                prebuilts/build-tools || true
-            elif "$REPO" list 2>/dev/null | awk '{print $1}' | grep -qx 'kernel_platform/prebuilts/build-tools'; then
-              "$REPO" sync \
-                -c \
-                --force-sync \
-                --no-clone-bundle \
-                --no-tags \
-                --optimized-fetch \
-                -j"$(nproc --all)" \
-                kernel_platform/prebuilts/build-tools || true
-            else
-              echo "repo list does not expose prebuilts/build-tools as a standalone project."
-            fi
-          fi
-
-          if [ -f "$PY3_CMD" ]; then
-            chmod +x "$PY3_CMD" || true
-            echo "Kleaf py3-cmd restored by repo sync."
-            echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
-            echo "::endgroup::"
-            exit 0
-          fi
-
-          echo ""
-          echo "Attempt 2: create linux_musl-x86 compatibility symlink from linux-x86."
-
           if [ -d "$GNU_DIR/bin" ] && [ -f "$GNU_DIR/bin/py3-cmd" ]; then
             rm -rf "$MUSL_DIR"
             ln -s "$GNU_DIR" "$MUSL_DIR"
@@ -738,32 +726,7 @@ jobs:
             fi
           fi
 
-          echo ""
-          echo "Attempt 3: fetch Android prebuilts/build-tools from android.googlesource.com."
-
-          rm -rf "$BUILD_TOOLS_DIR.tmp"
-
-          if git clone \
-            --depth=1 \
-            https://android.googlesource.com/platform/prebuilts/build-tools \
-            "$BUILD_TOOLS_DIR.tmp"; then
-
-            rm -rf "$BUILD_TOOLS_DIR"
-            mv "$BUILD_TOOLS_DIR.tmp" "$BUILD_TOOLS_DIR"
-
-            if [ -f "$PY3_CMD" ]; then
-              chmod +x "$PY3_CMD" || true
-              echo "Fetched prebuilts/build-tools successfully."
-              echo "KLEAF_PREBUILTS_OK=true" >> "$GITHUB_ENV"
-              echo "::endgroup::"
-              exit 0
-            fi
-          else
-            echo "Could not clone Android prebuilts/build-tools."
-          fi
-
-          echo ""
-          echo "Attempt 4: create py3-cmd wrapper using system python3."
+          echo "Creating py3-cmd wrapper using system python3."
 
           mkdir -p "$MUSL_DIR/bin"
 
@@ -782,17 +745,12 @@ jobs:
             exit 0
           fi
 
-          echo "::error::Kleaf build-tools are incomplete and py3-cmd could not be repaired."
+          echo "::error::Kleaf py3-cmd could not be repaired."
           echo "KLEAF_PREBUILTS_OK=false" >> "$GITHUB_ENV"
-
-          echo ""
-          echo "Final prebuilts/build-tools layout:"
-          find "$BUILD_TOOLS_DIR" -maxdepth 4 \( -type f -o -type l \) 2>/dev/null | sort | head -n 180 || true
-
           echo "::endgroup::"
           exit 1
 
-      - name: Repair Bazel external repositories
+      - name: Validate Bazel external repositories
         shell: bash
         run: |
           set -euo pipefail
@@ -800,42 +758,22 @@ jobs:
           KERNEL_PATH="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
           EXTERNAL_DIR="$KERNEL_PATH/external"
 
-          echo "::group::Repair Bazel external repositories"
+          echo "::group::Validate Bazel external repositories"
 
-          mkdir -p "$EXTERNAL_DIR"
+          echo "Kernel path: $KERNEL_PATH"
 
-          clone_if_missing() {
-            local path="$1"
-            local url="$2"
-            local ref="${3:-}"
-
-            if [ -d "$path" ] && [ "$(find "$path" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
-              echo "Already exists: $path"
-              return 0
-            fi
-
-            echo "Cloning missing Bazel repository:"
-            echo "  URL:  $url"
-            echo "  Path: $path"
-
-            rm -rf "$path"
-
-            if [ -n "$ref" ]; then
-              git clone --depth=1 --branch "$ref" "$url" "$path"
-            else
-              git clone --depth=1 "$url" "$path"
-            fi
-          }
-
-          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_python" "https://github.com/bazelbuild/rules_python.git"
-          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_cc" "https://github.com/bazelbuild/rules_cc.git"
-          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_pkg" "https://github.com/bazelbuild/rules_pkg.git"
-          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_java" "https://github.com/bazelbuild/rules_java.git"
-          clone_if_missing "$EXTERNAL_DIR/bazel-skylib" "https://github.com/bazelbuild/bazel-skylib.git"
+          if [ -d "$EXTERNAL_DIR" ]; then
+            echo "External directory exists:"
+            find "$EXTERNAL_DIR" -maxdepth 2 -type d | sort | sed -n '1,240p'
+          else
+            echo "No external directory found. This can be valid depending on manifest layout."
+          fi
 
           echo ""
-          echo "Bazel external repository layout:"
-          find "$EXTERNAL_DIR" -maxdepth 2 -type d | sort | sed -n '1,180p'
+          echo "Bazel files:"
+          find "$KERNEL_PATH" -maxdepth 3 \
+            \( -name "MODULE.bazel" -o -name "WORKSPACE" -o -name "WORKSPACE.bazel" -o -name "BUILD.bazel" -o -name "bazel" \) \
+            -print | sort | sed -n '1,240p'
 
           echo "::endgroup::"
 
@@ -865,23 +803,11 @@ jobs:
           done
 
           if [ -z "$BRANCH_LINE" ]; then
-            echo "No BRANCH= found in config files. Falling back to matrix values."
             ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
           else
             BRANCH_VALUE="${BRANCH_LINE#*=}"
-
-            case "$BRANCH_VALUE" in
-              android[0-9]*-*)
-                ANDROID_VERSION="$(echo "$BRANCH_VALUE" | grep -oE '^android[0-9]+' || true)"
-                ;;
-              *)
-                ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
-                ;;
-            esac
-
-            if [ -z "$ANDROID_VERSION" ]; then
-              ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
-            fi
+            ANDROID_VERSION="$(echo "$BRANCH_VALUE" | grep -oE '^android[0-9]+' || true)"
+            [ -z "$ANDROID_VERSION" ] && ANDROID_VERSION="${OP_ANDROID_VERSION:-${{ matrix.android_version }}}"
           fi
 
           VERSION="$(grep '^VERSION *=' Makefile | awk '{print $3}')"
@@ -1029,11 +955,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
+          key: ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
           restore-keys: |
-            ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
-            ccache-ksu-v6-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
-            ccache-ksu-v6-
+            ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
+            ccache-ksu-v7-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
+            ccache-ksu-v7-
 
       - name: Cache Bazel/Kleaf
         uses: actions/cache@v4
@@ -1043,11 +969,11 @@ jobs:
             ${{ env.BAZELISK_HOME }}
             ~/.cache/bazel
             ~/.cache/bazelisk
-          key: bazel-kleaf-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
+          key: bazel-kleaf-common-v1-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}
           restore-keys: |
-            bazel-kleaf-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
-            bazel-kleaf-v3-${{ env.OP_MODEL }}-
-            bazel-kleaf-v3-
+            bazel-kleaf-common-v1-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
+            bazel-kleaf-common-v1-${{ env.OP_MODEL }}-
+            bazel-kleaf-common-v1-
 
       - name: Configure ccache
         if: ${{ inputs.clean_build != true }}
@@ -1069,9 +995,10 @@ jobs:
           ccache -o sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
 
           {
-            echo "CCACHE_COMPILERCHECK=content"
-            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_COMPILERCHECK=%compiler% -dumpmachine; %compiler% -dumpversion"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}/$CONFIG"
             echo "CCACHE_NOHASHDIR=true"
+            echo "CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros,file_macro,system_headers"
             echo "CCACHE_IGNOREOPTIONS=--sysroot*"
           } >> "$GITHUB_ENV"
 
@@ -1101,7 +1028,7 @@ jobs:
             KERNEL_KEY="${OP_ANDROID_VERSION}-${OP_KERNEL_VERSION}"
 
             if [ -z "$SUSFS_INPUT" ] || [ "$SUSFS_INPUT" = "next" ]; then
-              SUSFS_BRANCH="${DEFAULT_SUSFS[$KERNEL_KEY]:-gki-android15-6.6}"
+              SUSFS_BRANCH="${DEFAULT_SUSFS[$KERNEL_KEY]:-gki-android16-6.12}"
             else
               SUSFS_BRANCH="$SUSFS_INPUT"
             fi
@@ -1133,7 +1060,7 @@ jobs:
               git checkout "$SUSFS_BRANCH"
             else
               echo "::error::SUSFS branch or commit '$SUSFS_BRANCH' not found"
-              git branch -r | head -n 50
+              git branch -r | head -n 80
               exit 1
             fi
 
@@ -1159,7 +1086,7 @@ jobs:
 
           if [ -f common/BUILD.bazel ]; then
             sed -i '/^[[:space:]]*"protected_exports_list"[[:space:]]*:[[:space:]]*"android\/abi_gki_protected_exports_aarch64",$/d' common/BUILD.bazel || true
-            sed -i 's/protected_module_names_list *= *":gki_aarch64_protected_module_names"/check_defconfig = "disabled"/' common/BUILD.bazel || true
+            sed -i '0,/protected_module_names_list *= *":gki_aarch64_protected_module_names"/s//check_defconfig = "disabled"/' common/BUILD.bazel || true
           fi
 
           if [ -f common/build.config.gki ]; then
@@ -1172,14 +1099,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "$CONFIG/kernel_platform"
+          cd "$CONFIG/kernel_platform/common"
 
           if ! wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash; then
             echo "BBG setup script failed, continuing"
           fi
 
-          echo "CONFIG_BBG=y" >> common/arch/arm64/configs/gki_defconfig
-          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/lockdown/lockdown,baseband_guard/ } }' common/security/Kconfig || true
+          echo "CONFIG_BBG=y" >> arch/arm64/configs/gki_defconfig
+          sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig || true
 
       - name: Add KernelSU Next
         if: ${{ matrix.ksu_type == 'KSUN' }}
@@ -1199,7 +1126,7 @@ jobs:
               "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "$KSU_INPUT"
           fi
 
-          git submodule update --init --recursive
+          git submodule update --init --recursive || true
 
           cd KernelSU-Next/kernel
 
@@ -1258,7 +1185,7 @@ jobs:
               "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s "$KSU_INPUT"
           fi
 
-          git submodule update --init --recursive
+          git submodule update --init --recursive || true
 
           cd KernelSU/kernel
 
@@ -1381,7 +1308,9 @@ jobs:
 
           cd "$CONFIG/kernel_platform"
 
-          cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+          CONFIG_FILE="common/arch/arm64/configs/gki_defconfig"
+
+          cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_KSU=y
           CONFIG_TMPFS_XATTR=y
           CONFIG_TMPFS_POSIX_ACL=y
@@ -1392,13 +1321,13 @@ jobs:
           EOF
 
           if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
-            cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+            cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_KSU_KPROBES_HOOK=n
           EOF
           fi
 
           if [ "${OP_SUSFS:-false}" = "true" ]; then
-            cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+            cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -1420,7 +1349,7 @@ jobs:
           fi
 
           if [ -n "${RUSTC_BIN_PATH:-}" ]; then
-            cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+            cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_ANDROID_BINDER_IPC_RUST=y
           CONFIG_CMDLINE="module_blacklist=rust_binder"
           CONFIG_CMDLINE_EXTEND=y
@@ -1430,7 +1359,7 @@ jobs:
           fi
 
           if [ "$OP_BBR" = "true" ]; then
-            cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+            cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_NET_SCH_FQ=y
@@ -1439,7 +1368,7 @@ jobs:
           fi
 
           if [ "$OP_TTL" = "true" ]; then
-            cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+            cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_IP_NF_TARGET_TTL=y
           CONFIG_IP6_NF_TARGET_HL=y
           CONFIG_IP6_NF_MATCH_HL=y
@@ -1447,7 +1376,7 @@ jobs:
           fi
 
           if [ "$OP_IP_SET" = "true" ]; then
-            cat >> common/arch/arm64/configs/gki_defconfig <<'EOF'
+            cat >> "$CONFIG_FILE" <<'EOF'
           CONFIG_IP_SET=y
           CONFIG_IP_SET_MAX=65534
           CONFIG_IP_SET_BITMAP_IP=y
@@ -1509,61 +1438,14 @@ jobs:
 
           cd "$KERNEL_PATH"
 
-          export SOURCE_DATE_EPOCH="$(git -C "$COMMON" log -1 --format=%ct 2>/dev/null || date +%s)"
-          export KBUILD_BUILD_TIMESTAMP="$(date -u)"
-          export KBUILD_BUILD_USER="${BUILD_USER:-OnePlus}"
-          export KBUILD_BUILD_HOST="${BUILD_HOST:-ubuntu-build}"
-          export KBUILD_BUILD_VERSION=1
+          BUILD_START="$(date +%s)"
+          BUILD_METHOD="unknown"
 
-          WORKSPACE="${GITHUB_WORKSPACE}"
+          echo "Requested build backend: $BUILD_BACKEND"
+          echo "Kernel platform path: $KERNEL_PATH"
+          echo "Common path: $COMMON"
 
-          MAP="-fdebug-prefix-map=${WORKSPACE}=."
-          MPMAP="-fmacro-prefix-map=${WORKSPACE}=."
-          FPMAP="-ffile-prefix-map=${WORKSPACE}=."
-
-          export KCFLAGS="${KCFLAGS:-} $MAP $MPMAP $FPMAP -no-canonical-prefixes -fdiagnostics-color=never -Qunused-arguments -Wno-unused-command-line-argument -D__ANDROID_COMMON_KERNEL__"
-          export KCPPFLAGS="${KCPPFLAGS:-} $MAP $MPMAP $FPMAP"
-
-          if [ "${{ inputs.optimize_level }}" = "O3" ]; then
-            KCFLAGS_EXTRA="-O3"
-          else
-            KCFLAGS_EXTRA="-O2"
-          fi
-
-          KCFLAGS="$KCFLAGS -Wno-error -pipe ${KCFLAGS_EXTRA}"
-
-          echo "CPU-specific -mcpu tuning is disabled for bindgen compatibility."
-          echo "No -mcpu=oryon-1 will be used."
-
-          if echo "$KCFLAGS $KCPPFLAGS" | grep -q -- '-mcpu=oryon-1'; then
-            echo "::error::-mcpu=oryon-1 detected unexpectedly"
-            exit 1
-          fi
-
-          export LLVM=1
-          export LLVM_IAS=1
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-
-          BASE_PATH="/usr/lib/ccache:${CLANG_BIN_PATH}:${KERNEL_PATH}/prebuilts/kernel-build-tools/linux-x86/bin:${KERNEL_PATH}/prebuilts/build-tools/linux_musl-x86/bin:${KERNEL_PATH}/prebuilts/build-tools/linux-x86/bin"
-
-          if [ -n "${RUSTC_BIN_PATH:-}" ]; then
-            export PATH="${BASE_PATH}:${RUSTC_BIN_PATH}:${PATH}"
-            export RUSTC="$RUSTC_BIN_PATH/rustc"
-          else
-            export PATH="${BASE_PATH}:${PATH}"
-          fi
-
-          if [ -n "${LIBCLANG_PATH:-}" ]; then
-            export LIBCLANG_PATH="$LIBCLANG_PATH"
-            echo "Using LIBCLANG_PATH=$LIBCLANG_PATH"
-          fi
-
-          if [ -n "${BINDGEN_EXTRA_CLANG_ARGS:-}" ]; then
-            export BINDGEN_EXTRA_CLANG_ARGS="$BINDGEN_EXTRA_CLANG_ARGS"
-            echo "Using BINDGEN_EXTRA_CLANG_ARGS=$BINDGEN_EXTRA_CLANG_ARGS"
-          fi
+          export BAZELISK_HOME="${BAZELISK_HOME}"
 
           if [ "${{ inputs.clean_build }}" = "true" ]; then
             export CCACHE_DISABLE=1
@@ -1572,8 +1454,12 @@ jobs:
             export USE_CCACHE=1
             export CCACHE_EXEC="$(command -v ccache || true)"
             export CCACHE_DIR="${CCACHE_DIR:-$HOME/.ccache}"
-            export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
+            export CCACHE_BASEDIR="${GITHUB_WORKSPACE}/$CONFIG"
             export CCACHE_NOHASHDIR=true
+            export CCACHE_COMPILERCHECK="${CCACHE_COMPILERCHECK:-%compiler% -dumpmachine; %compiler% -dumpversion}"
+            export CCACHE_SLOPPINESS="${CCACHE_SLOPPINESS:-include_file_mtime,include_file_ctime,time_macros,file_macro,system_headers}"
+
+            export PATH="/usr/lib/ccache:$PATH"
             export CC="ccache clang"
             export CXX="ccache clang++"
             export HOSTCC="ccache clang"
@@ -1582,17 +1468,8 @@ jobs:
 
           mkdir -p "${BAZEL_CACHE_DIR}" "${BAZEL_CACHE_DIR}/repository" "${BAZELISK_HOME}"
 
-          BUILD_START="$(date +%s)"
-          BUILD_METHOD="unknown"
-
-          echo "Requested build backend: $BUILD_BACKEND"
-          echo "Kernel platform path: $KERNEL_PATH"
-          echo "Common path: $COMMON"
-          echo "Final KCFLAGS=$KCFLAGS"
-          echo "Final KCPPFLAGS=$KCPPFLAGS"
-
           build_with_bazel=false
-          BAZEL_TARGET=""
+          BAZEL_TARGET="//common:kernel_aarch64_dist"
           BAZEL_QUERY_LOG="$KERNEL_PATH/bazel_targets.log"
           BAZEL_QUERY_ERRORS="$KERNEL_PATH/bazel_query_errors.log"
           KLEAF_PY3_CMD="$KERNEL_PATH/prebuilts/build-tools/linux_musl-x86/bin/py3-cmd"
@@ -1601,18 +1478,21 @@ jobs:
             echo "Build backend is make. Skipping Bazel."
             build_with_bazel=false
           else
-            if [ -x "$KERNEL_PATH/tools/bazel" ] && [ "${KLEAF_PREBUILTS_OK:-false}" = "true" ] && [ -x "$KLEAF_PY3_CMD" ]; then
+            if [ -x "$KERNEL_PATH/tools/bazel" ]; then
               chmod +x "$KERNEL_PATH/tools/bazel" || true
-              chmod +x "$KLEAF_PY3_CMD" || true
+
+              if [ -f "$KLEAF_PY3_CMD" ]; then
+                chmod +x "$KLEAF_PY3_CMD" || true
+              fi
+
               build_with_bazel=true
             else
               echo "Bazel/Kleaf prerequisites are incomplete."
               echo "tools/bazel executable: $([ -x "$KERNEL_PATH/tools/bazel" ] && echo yes || echo no)"
-              echo "KLEAF_PREBUILTS_OK=${KLEAF_PREBUILTS_OK:-unset}"
-              echo "py3-cmd executable: $([ -x "$KLEAF_PY3_CMD" ] && echo yes || echo no)"
+              echo "py3-cmd exists: $([ -f "$KLEAF_PY3_CMD" ] && echo yes || echo no)"
 
               if [ "$BUILD_BACKEND" = "bazel" ]; then
-                echo "::error::Bazel was requested, but prerequisites are incomplete."
+                echo "::error::Bazel was requested, but tools/bazel is missing."
                 exit 1
               fi
 
@@ -1621,77 +1501,23 @@ jobs:
           fi
 
           if [ "$build_with_bazel" = "true" ]; then
-            echo "Bazel/Kleaf detected and prebuilts are valid. Discovering available Bazel targets."
+            NPROC="$(nproc --all)"
+            BAZEL_JOBS="$((NPROC + 2))"
 
-            BAZEL_JOBS="$(nproc --all)"
-            if [ "$BAZEL_JOBS" -gt 10 ]; then
-              BAZEL_JOBS=10
+            if [ "$BAZEL_JOBS" -gt 12 ]; then
+              BAZEL_JOBS=12
             fi
 
-            echo "Running Bazel query..."
+            echo "Using Bazel target: $BAZEL_TARGET"
+            echo "Bazel jobs: $BAZEL_JOBS"
 
-            set +e
-            "$KERNEL_PATH/tools/bazel" query '//...:*' > "$BAZEL_QUERY_LOG" 2>"$BAZEL_QUERY_ERRORS"
-            BAZEL_QUERY_STATUS="$?"
-            set -e
-
-            if [ "$BAZEL_QUERY_STATUS" -ne 0 ]; then
-              echo "Bazel query failed with status $BAZEL_QUERY_STATUS."
+            if ! "$KERNEL_PATH/tools/bazel" query "$BAZEL_TARGET" > "$BAZEL_QUERY_LOG" 2>"$BAZEL_QUERY_ERRORS"; then
+              echo "Bazel target query failed for $BAZEL_TARGET"
               echo "Bazel query errors:"
               sed -n '1,260p' "$BAZEL_QUERY_ERRORS" || true
 
               if [ "$BUILD_BACKEND" = "bazel" ]; then
-                echo "::error::Bazel was requested, but Bazel query failed."
-                exit 1
-              fi
-
-              build_with_bazel=false
-            fi
-          fi
-
-          if [ "$build_with_bazel" = "true" ]; then
-            echo "Likely kernel/dist Bazel targets:"
-            grep -Ei '(kernel.*aarch64.*dist|aarch64.*kernel.*dist|kernel_aarch64|gki.*aarch64.*dist|aarch64.*dist)' "$BAZEL_QUERY_LOG" || true
-
-            candidate_targets=(
-              "//common:kernel_aarch64_dist"
-              "//common:kernel_aarch64"
-              "//common:kernel_aarch64_abi_dist"
-              "//common:kernel_aarch64_modules"
-              "//msm-kernel:kernel_aarch64_dist"
-              "//msm-kernel:kernel_aarch64"
-              "//kernel_platform:kernel_aarch64_dist"
-              "//:kernel_aarch64_dist"
-              "//:kernel_aarch64"
-            )
-
-            for target in "${candidate_targets[@]}"; do
-              if "$KERNEL_PATH/tools/bazel" query "$target" >/dev/null 2>&1; then
-                BAZEL_TARGET="$target"
-                echo "Selected Bazel target from candidates: $BAZEL_TARGET"
-                break
-              fi
-            done
-
-            if [ -z "$BAZEL_TARGET" ]; then
-              BAZEL_TARGET="$(
-                grep -Ei '(^//.*:(.*kernel.*aarch64.*dist|.*aarch64.*kernel.*dist|kernel_aarch64_dist|.*gki.*aarch64.*dist|.*aarch64.*dist)$)' "$BAZEL_QUERY_LOG" \
-                  | grep -Eiv '(headers|uapi|modules_prepare|config|abi_update|abi_dump|test|docs|toolchain|host)' \
-                  | head -n1 || true
-              )"
-
-              if [ -n "$BAZEL_TARGET" ]; then
-                echo "Selected Bazel target from query discovery: $BAZEL_TARGET"
-              fi
-            fi
-
-            if [ -z "$BAZEL_TARGET" ]; then
-              echo "No suitable Bazel kernel image/dist target found."
-              echo "First Bazel targets:"
-              sed -n '1,220p' "$BAZEL_QUERY_LOG" || true
-
-              if [ "$BUILD_BACKEND" = "bazel" ]; then
-                echo "::error::Bazel was requested, but no kernel Bazel target was found."
+                echo "::error::Bazel was requested, but target $BAZEL_TARGET is unavailable."
                 exit 1
               fi
 
@@ -1712,15 +1538,8 @@ jobs:
               --action_env=CCACHE_DIR="${CCACHE_DIR:-}"
               --action_env=CCACHE_BASEDIR="${CCACHE_BASEDIR:-}"
               --action_env=CCACHE_NOHASHDIR="${CCACHE_NOHASHDIR:-true}"
-              --action_env=KCFLAGS="${KCFLAGS}"
-              --action_env=KCPPFLAGS="${KCPPFLAGS}"
-              --action_env=KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP}"
-              --action_env=KBUILD_BUILD_USER="${KBUILD_BUILD_USER}"
-              --action_env=KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST}"
-              --action_env=KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION}"
-              --action_env=LIBCLANG_PATH="${LIBCLANG_PATH:-}"
-              --action_env=BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:-}"
-              --action_env=RUSTC="${RUSTC:-}"
+              --action_env=CCACHE_COMPILERCHECK="${CCACHE_COMPILERCHECK:-%compiler% -dumpmachine; %compiler% -dumpversion}"
+              --action_env=CCACHE_SLOPPINESS="${CCACHE_SLOPPINESS:-include_file_mtime,include_file_ctime,time_macros,file_macro,system_headers}"
             )
 
             echo "Building Bazel target: $BAZEL_TARGET"
@@ -1735,7 +1554,7 @@ jobs:
                 exit 1
               fi
 
-              echo "Bazel build failed. Falling back to Make build because build_backend=$BUILD_BACKEND."
+              echo "Bazel build failed. Falling back to Make because build_backend=$BUILD_BACKEND."
               BUILD_METHOD="make-fallback"
             fi
           else
@@ -1744,7 +1563,6 @@ jobs:
               exit 1
             fi
 
-            echo "Using Make build because build_backend=$BUILD_BACKEND."
             BUILD_METHOD="make"
           fi
 
@@ -1756,15 +1574,10 @@ jobs:
 
             cd "$COMMON"
 
-            if [ -d gki/aarch64/symbols ]; then
-              cat gki/aarch64/symbols/* 2>/dev/null | ../build/abi/flatten_symbol_list > abi_symbollist.raw || touch abi_symbollist.raw
-            else
-              touch abi_symbollist.raw
-            fi
-
-            touch protected_module_names_list
-            : > .scmversion
-
+            export LLVM=1
+            export LLVM_IAS=1
+            export ARCH=arm64
+            export SUBARCH=arm64
             export LD=ld.lld
             export HOSTLD=ld.lld
             export AR=llvm-ar
@@ -1776,16 +1589,11 @@ jobs:
             OUT=out
             mkdir -p "$OUT"
 
-            echo "Compiler check:"
-            which clang || true
-            clang --version | head -n1 || true
-
             make LTO=none O="$OUT" gki_defconfig
 
-            scripts/config --file "$OUT/.config" --set-str LOCALVERSION "${CUSTOM_LOCALVERSION:--OP-Wild}"
+            scripts/config --file "$OUT/.config" --set-str LOCALVERSION "${CUSTOM_LOCALVERSION:--OP-Wild}" || true
             scripts/config --file "$OUT/.config" -d LOCALVERSION_AUTO || true
             scripts/config --file "$OUT/.config" -d MODULE_SCMVERSION || true
-            sed -i 's/scm_version="$(scm_version --short)"/scm_version=""/' scripts/setlocalversion || true
 
             if [ "${{ inputs.optimize_level }}" = "O3" ]; then
               scripts/config --file "$OUT/.config" -d CC_OPTIMIZE_FOR_PERFORMANCE || true
@@ -1795,21 +1603,8 @@ jobs:
               scripts/config --file "$OUT/.config" -d CC_OPTIMIZE_FOR_PERFORMANCE_O3 || true
             fi
 
-            scripts/config --file "$OUT/.config" -e TRIM_UNUSED_KSYMS || true
-            scripts/config --file "$OUT/.config" --set-str UNUSED_KSYMS_WHITELIST "abi_symbollist.raw" || true
-
-            scripts/config --file "$OUT/.config" -e MODULE_SIG_PROTECT || true
-            scripts/config --file "$OUT/.config" --set-str MODULE_SIG_PROTECT_LIST "protected_module_names_list" || true
-
-            scripts/config --file "$OUT/.config" -d LTO || true
-            scripts/config --file "$OUT/.config" -d LTO_CLANG || true
-            scripts/config --file "$OUT/.config" -d LTO_CLANG_FULL || true
-            scripts/config --file "$OUT/.config" -d LTO_CLANG_THIN || true
-
             make LTO=none O="$OUT" olddefconfig
-
-            set -o pipefail
-            make LTO=none -j"$(nproc --all)" O="$OUT" KCFLAGS="$KCFLAGS" KCPPFLAGS="$KCPPFLAGS" Image 2>&1 | tee "$COMMON/build.log"
+            make LTO=none -j"$(nproc --all)" O="$OUT" Image 2>&1 | tee "$COMMON/build.log"
           fi
 
           BUILD_END="$(date +%s)"
@@ -1827,8 +1622,11 @@ jobs:
           IMAGE_PATH_FOUND="$(
             find "$KERNEL_PATH" \
               \( \
-                -path "*/bazel-bin/*/Image" \
+                -path "*/bazel-bin/common/*/Image" \
+                -o -path "*/bazel-bin/common/*/dist/Image" \
+                -o -path "*/bazel-bin/*/Image" \
                 -o -path "*/bazel-bin/*/dist/Image" \
+                -o -path "*/out/*/dist/Image" \
                 -o -path "*/dist/Image" \
                 -o -path "*/kernel_aarch64/Image" \
                 -o -path "*/out/arch/arm64/boot/Image" \
@@ -1843,7 +1641,7 @@ jobs:
 
           if [ -z "$IMAGE_PATH_FOUND" ] || [ ! -f "$IMAGE_PATH_FOUND" ]; then
             echo "::error::Kernel Image missing"
-            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 80 || true
+            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 100 || true
             exit 1
           fi
 
@@ -1900,8 +1698,11 @@ jobs:
             IMG="$(
               find "$KERNEL_PATH" \
                 \( \
-                  -path "*/bazel-bin/*/Image" \
+                  -path "*/bazel-bin/common/*/Image" \
+                  -o -path "*/bazel-bin/common/*/dist/Image" \
+                  -o -path "*/bazel-bin/*/Image" \
                   -o -path "*/bazel-bin/*/dist/Image" \
+                  -o -path "*/out/*/dist/Image" \
                   -o -path "*/dist/Image" \
                   -o -path "*/kernel_aarch64/Image" \
                   -o -path "*/out/arch/arm64/boot/Image" \
@@ -1917,7 +1718,7 @@ jobs:
 
           if [ -z "$IMG" ] || [ ! -f "$IMG" ]; then
             echo "::error::Kernel Image not found"
-            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 80 || true
+            find "$KERNEL_PATH" -name Image -type f -print 2>/dev/null | head -n 100 || true
             exit 1
           fi
 
@@ -2019,6 +1820,7 @@ jobs:
             echo "| Android | ${ANDROID_VER:-unknown} |"
             echo "| Kernel Base | ${KERNEL_VER:-unknown} |"
             echo "| Kernel Full | ${KERNEL_FULL_VER:-unknown} |"
+            echo "| Bazel Manifest | ${BAZEL_MANIFEST_BRANCH:-unknown} |"
             echo "| Requested Backend | ${{ inputs.build_backend }} |"
             echo "| Build Method | ${BUILD_METHOD:-unknown} |"
             echo "| Kernel Uname | \`${KERNEL_UNAME:-unknown}\` |"
@@ -2060,6 +1862,7 @@ jobs:
           echo "OP_OS_VERSION=${OP_OS_VERSION:-unknown}"
           echo "OP_BRANCH=${OP_BRANCH:-unknown}"
           echo "OP_MANIFEST=${OP_MANIFEST:-unknown}"
+          echo "BAZEL_MANIFEST_BRANCH=${BAZEL_MANIFEST_BRANCH:-unknown}"
           echo "ANDROID_VER=${ANDROID_VER:-unknown}"
           echo "KERNEL_VER=${KERNEL_VER:-unknown}"
           echo "BUILD_METHOD=${BUILD_METHOD:-unknown}"
@@ -2072,21 +1875,25 @@ jobs:
 
           echo ""
           echo "Workspace directories:"
-          find "$GITHUB_WORKSPACE" -maxdepth 3 -type d | sort | head -n 200 || true
+          find "$GITHUB_WORKSPACE" -maxdepth 3 -type d | sort | head -n 240 || true
 
           echo ""
           echo "Bazel/Kleaf files:"
           find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -maxdepth 5 \
             \( -name "BUILD.bazel" -o -name "MODULE.bazel" -o -name "WORKSPACE" -o -name "WORKSPACE.bazel" -o -name "bazel" -o -name "py3-cmd" \) \
-            -print 2>/dev/null | sort | head -n 200 || true
+            -print 2>/dev/null | sort | head -n 240 || true
 
           echo ""
           echo "Bazel external directories:"
-          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform/external" -maxdepth 2 -type d -print 2>/dev/null | sort | head -n 200 || true
+          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform/external" -maxdepth 2 -type d -print 2>/dev/null | sort | head -n 240 || true
+
+          echo ""
+          echo "Reject files:"
+          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -name "*.rej" -type f -print 2>/dev/null | sort | head -n 120 || true
 
           echo ""
           echo "Image candidates:"
-          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -name Image -type f -print 2>/dev/null | head -n 100 || true
+          find "$GITHUB_WORKSPACE/$CONFIG/kernel_platform" -name Image -type f -print 2>/dev/null | head -n 120 || true
 
           echo ""
           echo "Recent logs:"
@@ -2102,6 +1909,7 @@ jobs:
             ${{ env.CONFIG }}/kernel_platform/common/build.log
             ${{ env.CONFIG }}/kernel_platform/bazel_targets.log
             ${{ env.CONFIG }}/kernel_platform/bazel_query_errors.log
+            ${{ env.CONFIG }}/kernel_platform/**/*.rej
           retention-days: 7
           if-no-files-found: ignore
 
