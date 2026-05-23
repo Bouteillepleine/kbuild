@@ -1,4 +1,4 @@
-name: OnePlus 15 / 15T / 15R / Ace6T SukiSU Ultra
+name: OnePlus 15 / 15T / 15R / Ace6T
 
 on:
   workflow_dispatch:
