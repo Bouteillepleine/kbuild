@@ -86,11 +86,17 @@ jobs:
       device_count: ${{ steps.set-matrix.outputs.count }}
 
     steps:
-      - name: Checkout configs
+      - name: Checkout WildKernels source data
         uses: actions/checkout@v4
         with:
+          repository: WildKernels/OnePlus_KernelSU_SUSFS
+          ref: main
+          path: source-data
+          fetch-depth: 1
           sparse-checkout: |
             configs/
+            manifests/
+            kernel_patches/
           sparse-checkout-cone-mode: false
 
       - name: Generate build matrix
@@ -131,12 +137,44 @@ jobs:
           echo "Normalized KSU options:"
           echo "$ksu_options_normalized" | jq '.'
 
-          mapfile -t all_json_files < <(find configs/ -name "*.json" -print)
+          case "$input" in
+            OOS16)
+              CONFIG_SEARCH_DIR="source-data/configs/oos16"
+              ;;
+            OOS15)
+              CONFIG_SEARCH_DIR="source-data/configs/oos15"
+              ;;
+            OOS14)
+              CONFIG_SEARCH_DIR="source-data/configs/oos14"
+              ;;
+            OOS15+16|OOS14+15|OOS14+15+16|android*-*.*)
+              CONFIG_SEARCH_DIR="source-data/configs"
+              ;;
+            *)
+              CONFIG_SEARCH_DIR="source-data/configs"
+              ;;
+          esac
 
-          if [ "${#all_json_files[@]}" -eq 0 ]; then
-            echo "::error::No config JSON files found in configs/"
+          if [ ! -d "$CONFIG_SEARCH_DIR" ]; then
+            echo "::error::Config directory not found: $CONFIG_SEARCH_DIR"
+            echo ""
+            echo "Available directories:"
+            find source-data -maxdepth 5 -type d | sort || true
             exit 1
           fi
+
+          mapfile -t all_json_files < <(find "$CONFIG_SEARCH_DIR" -name "*.json" -print | sort)
+
+          if [ "${#all_json_files[@]}" -eq 0 ]; then
+            echo "::error::No config JSON files found in $CONFIG_SEARCH_DIR"
+            echo ""
+            echo "Available config files:"
+            find source-data/configs -maxdepth 6 -type f | sort || true
+            exit 1
+          fi
+
+          echo "Found config files:"
+          printf '  - %s\n' "${all_json_files[@]}"
 
           jq -s '.' "${all_json_files[@]}" > matrix.json
 
@@ -165,6 +203,7 @@ jobs:
               IFS='-' read -r av kv <<< "$input"
               jq_filter="map(select(.os_version == \"OOS15\" or .os_version == \"OOS16\")) | map(select(.android_version == \"$av\" and .kernel_version == \"$kv\"))"
               echo "Android-kernel filter applied: $av-$kv"
+              echo "Restricted to OOS15 and OOS16"
               ;;
             *)
               echo "::warning::Unknown input '$input'. Using empty filter."
@@ -177,6 +216,7 @@ jobs:
 
           if [ "$count" -eq 0 ]; then
             echo "::error::No config files found for input '$input'"
+            echo ""
             echo "Available configurations:"
             jq -r '.[] | "  - \(.model) (\(.os_version), \(.android_version)-\(.kernel_version))"' matrix.json
             exit 1
@@ -305,6 +345,7 @@ jobs:
           if command -v docker >/dev/null 2>&1; then
             docker rmi $(docker images -q) 2>/dev/null || true
           fi
+
           echo "::endgroup::"
 
           echo "::group::Disk usage after cleanup"
@@ -323,6 +364,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Checkout WildKernels source data
+        uses: actions/checkout@v4
+        with:
+          repository: WildKernels/OnePlus_KernelSU_SUSFS
+          ref: main
+          path: source-data
+          fetch-depth: 1
+          sparse-checkout: |
+            configs/
+            manifests/
+            kernel_patches/
+          sparse-checkout-cone-mode: false
+
+      - name: Prepare external source files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "::group::Prepare external source files"
+
+          rm -rf manifests kernel_patches
+
+          cp -a source-data/manifests ./manifests
+          cp -a source-data/kernel_patches ./kernel_patches
+
+          echo "Prepared manifests:"
+          find manifests -maxdepth 4 -type f | sort | head -n 100
+
+          echo ""
+          echo "Prepared kernel patches:"
+          find kernel_patches -maxdepth 4 -type f | sort | head -n 100
+
+          echo "::endgroup::"
 
       - name: Resolve SUSFS branch from workflow inputs
         id: susfs
@@ -577,7 +652,16 @@ jobs:
           elif [[ "$OP_BRANCH" == wild/* ]]; then
             mkdir -p .repo/manifests
 
-            cp "../manifests/$(echo "$OP_OS_VERSION" | tr '[:upper:]' '[:lower:]')/$OP_MANIFEST" .repo/manifests/temp_manifest.xml
+            MANIFEST_PATH="../manifests/$(echo "$OP_OS_VERSION" | tr '[:upper:]' '[:lower:]')/$OP_MANIFEST"
+
+            if [ ! -f "$MANIFEST_PATH" ]; then
+              echo "::error::Manifest file not found: $MANIFEST_PATH"
+              echo "Available manifests:"
+              find ../manifests -maxdepth 4 -type f | sort || true
+              exit 1
+            fi
+
+            cp "$MANIFEST_PATH" .repo/manifests/temp_manifest.xml
 
             "$REPO" init \
               -u https://github.com/OnePlusOSS/kernel_manifest.git \
@@ -852,7 +936,11 @@ jobs:
           fi
 
           git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
-          git clone --depth=1 https://github.com/TheWildJames/kernel_patches.git
+
+          if [ ! -d "$GITHUB_WORKSPACE/kernel_patches" ]; then
+            echo "::error::kernel_patches directory missing. It should have been copied from source-data/kernel_patches."
+            exit 1
+          fi
 
           if [ "$OP_SUSFS" = "true" ]; then
             git clone https://gitlab.com/simonpunk/susfs4ksu.git
@@ -1055,8 +1143,14 @@ jobs:
           fi
 
           if [ "$OP_HMBIRD" = "true" ]; then
-            dos2unix "../../../kernel_patches/oneplus/hmbird/fengchi_${OP_MODEL}_${OP_OS_VERSION}.patch"
-            patch -p1 -F 3 < "../../../kernel_patches/oneplus/hmbird/fengchi_${OP_MODEL}_${OP_OS_VERSION}.patch"
+            PATCH_FILE="../../../kernel_patches/oneplus/hmbird/fengchi_${OP_MODEL}_${OP_OS_VERSION}.patch"
+
+            if [ -f "$PATCH_FILE" ]; then
+              dos2unix "$PATCH_FILE"
+              patch -p1 -F 3 < "$PATCH_FILE"
+            else
+              echo "::warning::HMBIRD patch not found: $PATCH_FILE"
+            fi
           fi
 
           patch -p1 --forward < "../../../kernel_patches/common/optimized_mem_operations.patch" || true
@@ -1418,7 +1512,6 @@ jobs:
 
           echo "::group::Create kernel ZIP"
 
-          KERNEL_PATH="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
           CONFIG_DIR="$GITHUB_WORKSPACE/$CONFIG"
           IMAGE_PATH="${IMAGE_PATH:-$CONFIG_DIR/kernel_platform/common/out/arch/arm64/boot/Image}"
 
@@ -1471,8 +1564,8 @@ jobs:
             echo ""
             echo "| Metric | Value |"
             echo "|--------|-------|"
-            echo "| Model | $OP_MODEL |"
-            echo "| OS Version | $OP_OS_VERSION |"
+            echo "| Model | ${OP_MODEL:-unknown} |"
+            echo "| OS Version | ${OP_OS_VERSION:-unknown} |"
             echo "| Android | ${ANDROID_VER:-unknown} |"
             echo "| Kernel Base | ${KERNEL_VER:-unknown} |"
             echo "| Kernel Full | ${KERNEL_FULL_VER:-unknown} |"
@@ -1486,7 +1579,7 @@ jobs:
             echo "| Image SHA256 | \`${{ steps.collect_stats.outputs.image_sha256 }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$OP_SUSFS" = "true" ]; then
+          if [ "${OP_SUSFS:-false}" = "true" ]; then
             {
               echo "| SUSFS Version | ${SUSVER:-unknown} |"
               echo "| SUSFS Branch | ${SUSFS_BRANCH_NAME:-unknown} |"
@@ -1585,6 +1678,18 @@ jobs:
 
           ZIP_COUNT="$(find ./downloaded-artifacts -name "*.zip" | wc -l | tr -d ' ')"
 
+          SUSFS_A12="${{ inputs.android12-5_10_susfs_branch_or_commit }}"
+          SUSFS_A13="${{ inputs.android13-5_15_susfs_branch_or_commit }}"
+          SUSFS_A14="${{ inputs.android14-6_1_susfs_branch_or_commit }}"
+          SUSFS_A15="${{ inputs.android15-6_6_susfs_branch_or_commit }}"
+          SUSFS_A16="${{ inputs.android16-6_12_susfs_branch_or_commit }}"
+
+          [ -z "$SUSFS_A12" ] && SUSFS_A12="gki-android12-5.10 auto"
+          [ -z "$SUSFS_A13" ] && SUSFS_A13="gki-android13-5.15 auto"
+          [ -z "$SUSFS_A14" ] && SUSFS_A14="gki-android14-6.1 auto"
+          [ -z "$SUSFS_A15" ] && SUSFS_A15="gki-android15-6.6 auto"
+          [ -z "$SUSFS_A16" ] && SUSFS_A16="gki-android16-6.12 auto"
+
           cat > release_notes.md <<EOF
           # OnePlus Kernels with KernelSU / KernelSU Next & SUSFS
 
@@ -1609,11 +1714,11 @@ jobs:
 
           | Kernel Version | SUSFS Branch/Commit |
           |----------------|---------------------|
-          | android12-5.10 | \`${{ inputs.android12-5_10_susfs_branch_or_commit || 'gki-android12-5.10 auto' }}\` |
-          | android13-5.15 | \`${{ inputs.android13-5_15_susfs_branch_or_commit || 'gki-android13-5.15 auto' }}\` |
-          | android14-6.1 | \`${{ inputs.android14-6_1_susfs_branch_or_commit || 'gki-android14-6.1 auto' }}\` |
-          | android15-6.6 | \`${{ inputs.android15-6_6_susfs_branch_or_commit || 'gki-android15-6.6 auto' }}\` |
-          | android16-6.12 | \`${{ inputs.android16-6_12_susfs_branch_or_commit || 'gki-android16-6.12 auto' }}\` |
+          | android12-5.10 | \`$SUSFS_A12\` |
+          | android13-5.15 | \`$SUSFS_A13\` |
+          | android14-6.1 | \`$SUSFS_A14\` |
+          | android15-6.6 | \`$SUSFS_A15\` |
+          | android16-6.12 | \`$SUSFS_A16\` |
 
           ---
 
