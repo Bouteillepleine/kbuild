@@ -720,6 +720,41 @@ jobs:
 
           echo "::endgroup::"
 
+      - name: Repair Bazel external repositories
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          KERNEL_PATH="$GITHUB_WORKSPACE/$CONFIG/kernel_platform"
+          EXTERNAL_DIR="$KERNEL_PATH/external"
+
+          echo "::group::Repair Bazel external repositories"
+
+          mkdir -p "$EXTERNAL_DIR"
+
+          clone_if_missing() {
+            local path="$1"
+            local url="$2"
+
+            if [ -d "$path" ] && [ "$(find "$path" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
+              echo "Already exists: $path"
+              return 0
+            fi
+
+            echo "Cloning $url -> $path"
+            rm -rf "$path"
+            git clone --depth=1 "$url" "$path"
+          }
+
+          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_python" "https://github.com/bazelbuild/rules_python.git"
+          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_cc" "https://github.com/bazelbuild/rules_cc.git"
+          clone_if_missing "$EXTERNAL_DIR/bazelbuild-rules_pkg" "https://github.com/bazelbuild/rules_pkg.git"
+          clone_if_missing "$EXTERNAL_DIR/bazel-skylib" "https://github.com/bazelbuild/bazel-skylib.git"
+
+          find "$EXTERNAL_DIR" -maxdepth 2 -type d | sort | sed -n '1,120p'
+
+          echo "::endgroup::"
+
       - name: Get kernel version info
         shell: bash
         run: |
