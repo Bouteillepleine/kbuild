@@ -8,18 +8,14 @@ on:
         description: "Primary kernel configuration to build"
         required: true
         default: oneplus_15
-        options:
-          - oneplus_nord_n30_se_5g_v
+        options:          
           - oneplus_10r_v
-          - oneplus_nord_3_v
-          - oneplus_ace_v
-          - oneplus_ace_race_v
+          - oneplus_nord_3_v          
           - oneplus_10_pro_b
           - oneplus_10t_v
           - oneplus_11r_b
           - oneplus_ace2_b
-          - oneplus_pad_lite_b
-          - oneplus_pad_lite_Canary_b
+          - oneplus_pad_lite_b          
           - oneplus_pad_mt6983_b
           - oneplus_ace_2v_b
           - oneplus_ace_pro_v
@@ -100,7 +96,7 @@ on:
         type: string
         description: "Custom kernel suffix. Leave empty to use a random suffix, or enter -1 to disable."
         required: false
-        default: ""
+        default: "5-gb2a876903b49-ab14541642-4k"
 
       LSM_BBG:
         type: boolean
