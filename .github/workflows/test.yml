@@ -1020,7 +1020,7 @@ jobs:
           cd kernel_workspace/kernel_platform
 
           if (( VERSIONLEVEL < 6 || (VERSIONLEVEL == 6 && PATCHLEVEL < 12) )); then
-            echo "Kernel version is ${KERNEL_VERSION}. LSM API patch is only needed for 6.12+ style LSM API. Skipping."
+            echo "Kernel version is ${VERSIONLEVEL}.${PATCHLEVEL}.${SUBLEVEL}. LSM API patch is only needed for 6.12+ style LSM API. Skipping."
             exit 0
           fi
 
