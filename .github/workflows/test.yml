@@ -1012,6 +1012,27 @@ jobs:
             fi
           fi
 
+      - name: Debug SukiSU Layout
+        run: |
+          cd kernel_workspace/kernel_platform
+
+          echo "::group::KernelSU/SukiSU files"
+          find . -maxdepth 9 \( -iname '*kernelsu*' -o -iname '*ksu*' -o -iname '*suki*' \) 2>/dev/null | head -n 500 || true
+          echo "::endgroup::"
+
+          echo "::group::SukiSU hook/security files"
+          find . -type f \( -iname '*hook*.c' -o -iname '*lsm*.c' -o -iname '*security*.c' \) 2>/dev/null | grep -Ei 'ksu|kernel|suki|hook|lsm' | head -n 500 || true
+          echo "::endgroup::"
+
+          echo "::group::security_add_hooks occurrences"
+          grep -RIn 'security_add_hooks' ./KernelSU ./common . --include='*.c' --include='*.h' 2>/dev/null | head -n 200 || true
+          echo "::endgroup::"
+
+          echo "::group::ksu_hooks occurrences"
+          grep -RIn 'ksu_hooks' ./KernelSU ./common . --include='*.c' --include='*.h' 2>/dev/null | head -n 200 || true
+          echo "::endgroup::"
+
+
       - name: Fix SukiSU LSM API for Linux 6.12
         run: |
           cd kernel_workspace/kernel_platform
@@ -1021,17 +1042,48 @@ jobs:
             exit 0
           fi
 
-          LSM_FILE="$(find . -path '*/drivers/kernelsu/hook/lsm_hook.c' | head -n 1)"
+          echo "Searching for SukiSU LSM hook file..."
+
+          LSM_FILE=""
+
+          # Preferred historical path.
+          LSM_FILE="$(find . -type f -path '*/drivers/kernelsu/hook/lsm_hook.c' | head -n 1 || true)"
+
+          # Broader fallback: any lsm_hook.c.
+          if [[ -z "$LSM_FILE" ]]; then
+            LSM_FILE="$(find . -type f -name 'lsm_hook.c' | head -n 1 || true)"
+          fi
+
+          # Strong fallback: any file containing the old security_add_hooks call.
+          if [[ -z "$LSM_FILE" ]]; then
+            LSM_FILE="$(grep -RIl 'security_add_hooks(ksu_hooks' . \
+              --include='*.c' --include='*.h' 2>/dev/null | head -n 1 || true)"
+          fi
+
+          # Last fallback: any file containing ksu_hooks.
+          if [[ -z "$LSM_FILE" ]]; then
+            LSM_FILE="$(grep -RIl 'ksu_hooks' . \
+              --include='*.c' --include='*.h' 2>/dev/null | head -n 1 || true)"
+          fi
 
           if [[ -z "$LSM_FILE" || ! -f "$LSM_FILE" ]]; then
-            echo "Could not find SukiSU lsm_hook.c"
-            exit 1
+            echo "::warning title=SukiSU LSM hook not found::Could not find lsm_hook.c, security_add_hooks(ksu_hooks), or ksu_hooks. Skipping LSM API patch."
+
+            echo "::group::KernelSU/SukiSU path diagnostics"
+            find . -maxdepth 5 \( -iname '*kernelsu*' -o -iname '*ksu*' -o -iname '*suki*' \) 2>/dev/null | head -n 200 || true
+            echo "::endgroup::"
+
+            echo "::group::security_add_hooks diagnostics"
+            grep -RIn 'security_add_hooks' . --include='*.c' --include='*.h' 2>/dev/null | head -n 100 || true
+            echo "::endgroup::"
+
+            exit 0
           fi
 
           LSM_HEADER="common/include/linux/lsm_hooks.h"
 
           if [[ ! -f "$LSM_HEADER" ]]; then
-            LSM_HEADER="$(find . -path '*/include/linux/lsm_hooks.h' | head -n 1)"
+            LSM_HEADER="$(find . -type f -path '*/include/linux/lsm_hooks.h' | head -n 1 || true)"
           fi
 
           if [[ -z "$LSM_HEADER" || ! -f "$LSM_HEADER" ]]; then
@@ -1095,27 +1147,36 @@ jobs:
 
           if 'static const struct lsm_id ksu_lsmid' not in text:
               marker = 'static struct security_hook_list ksu_hooks[]'
+
               if marker not in text:
-                  print("Could not find ksu_hooks marker.")
-                  sys.exit(1)
+                  marker = 'static struct security_hook_list'
+
+              if marker not in text:
+                  print("Could not find security_hook_list marker. File may use a newer SukiSU LSM layout.")
+                  sys.exit(0)
 
               text = text.replace(marker, lsmid_block + marker, 1)
 
           if old_call in text:
               text = text.replace(old_call, new_call, 1)
           else:
-              text = re.sub(
+              text_new = re.sub(
                   r'security_add_hooks\(\s*ksu_hooks\s*,\s*ARRAY_SIZE\(ksu_hooks\)\s*,\s*"ksu"\s*\)\s*;',
                   new_call,
                   text,
                   count=1,
               )
 
+              if text_new == text:
+                  print("Did not find old security_add_hooks string call. File may already be compatible.")
+              else:
+                  text = text_new
+
           path.write_text(text)
           PY
 
           echo "::group::SukiSU LSM hook preview"
-          grep -n -A10 -B10 'ksu_lsmid\|security_add_hooks' "$LSM_FILE"
+          grep -n -A10 -B10 'ksu_lsmid\|security_add_hooks\|ksu_hooks' "$LSM_FILE" || true
           echo "::endgroup::"
 
       - name: Apply UNICODE_BYPASS
