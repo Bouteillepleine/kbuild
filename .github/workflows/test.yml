@@ -490,13 +490,58 @@ jobs:
           mkdir -p .repo/manifests
           cp "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml" ".repo/manifests/${FILE}.xml"
 
+          MANIFEST_FILE=".repo/manifests/${FILE}.xml"
+
+          echo "Sanitizing manifest: removing non-build test prebuilts that often have missing CLO refs..."
+
+          python3 - "$MANIFEST_FILE" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          manifest = Path(sys.argv[1])
+
+          remove_paths = {
+              "kernel_platform/prebuilts/asuite",
+              "kernel_platform/tools/tradefederation/prebuilts",
+              "kernel_platform/prebuilts/tradefed",
+          }
+
+          tree = ET.parse(manifest)
+          root = tree.getroot()
+
+          removed = []
+
+          for project in list(root.findall("project")):
+              path = project.get("path") or project.get("name") or ""
+              name = project.get("name") or ""
+
+              if (
+                  path in remove_paths
+                  or name.endswith("/prebuilts/asuite")
+                  or "tradefederation/prebuilts" in path
+                  or "prebuilts/tradefed" in path
+              ):
+                  root.remove(project)
+                  removed.append(path or name)
+
+          tree.write(manifest, encoding="UTF-8", xml_declaration=True)
+
+          if removed:
+              print("Removed projects:")
+              for item in removed:
+                  print(f"  - {item}")
+          else:
+              print("No matching test prebuilt projects found.")
+          PY
+
           BASE_URL="https://github.com/${MANIFEST_REPO}/${MANIFEST_REPO_NAME}.git"
 
           echo "Initializing repository from ${MANIFEST_REPO}/${MANIFEST_REPO_NAME} branch ${MANIFEST_BRANCH}..."
 
           repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
 
-          repo sync -c -j8 --no-clone-bundle --no-tags --optimized-fetch --force-sync
+          repo sync -c -j8 --no-clone-bundle --no-tags --optimized-fetch --force-sync --fail-fast --progress
 
           KERNEL_REPOS=""
           KERNEL_REPOS_PATH=$(find . -type f -name "build.config.msm.common" | head -n 1)
@@ -530,6 +575,7 @@ jobs:
             sed -i 's/check_defconfig = None,/check_defconfig = "disabled",/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
             sed -i 's/if check_defconfig == None:/if False:  # check_defconfig == None:/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
           fi
+
 
       - name: Kernel Version Handling
         run: |
