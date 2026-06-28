@@ -486,9 +486,15 @@ jobs:
           mkdir -p .repo/manifests
           cp "$GITHUB_WORKSPACE/.repo/manifests_fallback/${FILE}.xml" ".repo/manifests/${FILE}.xml"
 
+          BASE_URL="https://github.com/${MANIFEST_REPO}/${MANIFEST_REPO_NAME}.git"
+
+          echo "Initializing repository from ${MANIFEST_REPO}/${MANIFEST_REPO_NAME} branch ${MANIFEST_BRANCH}..."
+
+          repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
+
           MANIFEST_FILE=".repo/manifests/${FILE}.xml"
 
-          echo "Sanitizing manifest: removing non-build test prebuilts that often have missing CLO refs..."
+          echo "Sanitizing active manifest after repo init..."
 
           python3 - "$MANIFEST_FILE" <<'PY'
           import sys
@@ -499,8 +505,14 @@ jobs:
 
           remove_paths = {
               "kernel_platform/prebuilts/asuite",
-              "kernel_platform/tools/tradefederation/prebuilts",
               "kernel_platform/prebuilts/tradefed",
+              "kernel_platform/tools/tradefederation/prebuilts",
+          }
+
+          remove_name_fragments = {
+              "prebuilts/asuite",
+              "prebuilts/tradefed",
+              "tools/tradefederation/prebuilts",
           }
 
           tree = ET.parse(manifest)
@@ -509,33 +521,35 @@ jobs:
           removed = []
 
           for project in list(root.findall("project")):
-              path = project.get("path") or project.get("name") or ""
+              path = project.get("path") or ""
               name = project.get("name") or ""
 
-              if (
+              should_remove = (
                   path in remove_paths
-                  or name.endswith("/prebuilts/asuite")
-                  or "tradefederation/prebuilts" in path
-                  or "prebuilts/tradefed" in path
-              ):
+                  or any(fragment in path for fragment in remove_name_fragments)
+                  or any(fragment in name for fragment in remove_name_fragments)
+              )
+
+              if should_remove:
                   root.remove(project)
                   removed.append(path or name)
 
           tree.write(manifest, encoding="UTF-8", xml_declaration=True)
 
           if removed:
-              print("Removed projects:")
+              print("Removed projects from active manifest:")
               for item in removed:
                   print(f"  - {item}")
           else:
-              print("No matching test prebuilt projects found.")
+              print("No matching test prebuilt projects found in active manifest.")
           PY
 
-          BASE_URL="https://github.com/${MANIFEST_REPO}/${MANIFEST_REPO_NAME}.git"
+          echo "Verifying removed projects are gone from manifest..."
 
-          echo "Initializing repository from ${MANIFEST_REPO}/${MANIFEST_REPO_NAME} branch ${MANIFEST_BRANCH}..."
-
-          repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
+          if grep -E 'prebuilts/asuite|prebuilts/tradefed|tradefederation/prebuilts' "$MANIFEST_FILE"; then
+            echo "Manifest still contains broken test prebuilts after sanitizing. Aborting."
+            exit 9
+          fi
 
           repo sync -c -j8 --no-clone-bundle --no-tags --optimized-fetch --force-sync --fail-fast
 
