@@ -177,11 +177,7 @@ jobs:
           echo "files=$FILES_JSON" >> "$GITHUB_OUTPUT"
 
   build:
-    name: >-
-      [FAST]
-      ${{ contains(matrix.FILE, '_aosp') && '[AOSP] ' || '' }}
-      ${{ github.event.inputs.LSM_BBG == 'true' && '[BBG] ' || '' }}
-      Build ${{ matrix.FILE }} ${{ github.event.inputs.SUFFIX }}
+    name: Build
 
     needs: prepare
     runs-on: ubuntu-latest
@@ -541,7 +537,7 @@ jobs:
 
           repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
 
-          repo sync -c -j8 --no-clone-bundle --no-tags --optimized-fetch --force-sync --fail-fast --progress
+          repo sync -c -j8 --no-clone-bundle --no-tags --optimized-fetch --force-sync --fail-fast
 
           KERNEL_REPOS=""
           KERNEL_REPOS_PATH=$(find . -type f -name "build.config.msm.common" | head -n 1)
@@ -575,7 +571,6 @@ jobs:
             sed -i 's/check_defconfig = None,/check_defconfig = "disabled",/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
             sed -i 's/if check_defconfig == None:/if False:  # check_defconfig == None:/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
           fi
-
 
       - name: Kernel Version Handling
         run: |
