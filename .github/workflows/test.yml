@@ -786,7 +786,14 @@ jobs:
             sed -i "s|^KSU_VERSION_API := .*|KSU_VERSION_API := $ESC_KSU_VERSION_TAG|" kernel/Makefile
           fi
 
-          KSU_VERSION=$(expr $(git rev-list --count HEAD 2>/dev/null || echo 13000) + 37185)
+          KSU_VERSION_OFFSET=40033
+          KSU_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo 786)
+          KSU_VERSION=$((KSU_COMMIT_COUNT + KSU_VERSION_OFFSET))
+          
+          echo "KSU_VERSION_OFFSET=$KSU_VERSION_OFFSET"
+          echo "KSU_COMMIT_COUNT=$KSU_COMMIT_COUNT"
+          echo "Calculated SukiSU version: $KSU_VERSION"
+          
           echo "KSUVER=$KSU_VERSION" >> "$GITHUB_ENV"
 
           echo "::group::Final KernelSU Makefile version preview"
