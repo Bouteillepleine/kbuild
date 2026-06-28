@@ -364,8 +364,8 @@ jobs:
 
       - name: Configure Git
         run: |
-          git config --global user.name "Numbersf"
-          git config --global user.email "263623064@qq.com"
+          git config --global user.name "OnePlus"
+          git config --global user.email "ubuntu-build@qq.com"
           mkdir kernel_workspace
           cd kernel_workspace
           git clone https://github.com/Numbersf/Action-Build.git -b SukiSU-Ultra
@@ -551,7 +551,12 @@ jobs:
             exit 9
           fi
 
+          echo "Starting repo sync..."
+
           repo sync -c -j8 --no-clone-bundle --no-tags --optimized-fetch --force-sync --fail-fast
+          
+          echo "Finalizing sync state..."
+          echo "repo sync has finished successfully."
 
           KERNEL_REPOS=""
           KERNEL_REPOS_PATH=$(find . -type f -name "build.config.msm.common" | head -n 1)
@@ -858,7 +863,7 @@ jobs:
             if [ "$SUBLEVEL" -ge "58" ]; then
               sed -i '/^#include <linux\/dma-buf.h>$/d' fs/exec.c
             fi
-          fi
+          fi      
 
       - name: Apply Patches SukiSU Ultra
         env:
@@ -986,9 +991,115 @@ jobs:
 
           if [ "$KMI" = "android16-6.12" ]; then
             if [ "$SUBLEVEL" -ge "58" ]; then
-              sed -i '/^#include /a #include <linux/dma-buf.h>' fs/exec.c
+              grep -q '^#include <linux/dma-buf.h>$' fs/exec.c || sed -i '/^#include /a #include <linux/dma-buf.h>' fs/exec.c
             fi
           fi
+
+      - name: Fix SukiSU LSM API for Linux 6.12
+        run: |
+          cd kernel_workspace/kernel_platform
+
+          if (( VERSIONLEVEL < 6 || (VERSIONLEVEL == 6 && PATCHLEVEL < 12) )); then
+            echo "Kernel version is ${KERNEL_VERSION}. LSM API patch is only needed for 6.12+ style LSM API. Skipping."
+            exit 0
+          fi
+
+          LSM_FILE="$(find . -path '*/drivers/kernelsu/hook/lsm_hook.c' | head -n 1)"
+
+          if [[ -z "$LSM_FILE" || ! -f "$LSM_FILE" ]]; then
+            echo "Could not find SukiSU lsm_hook.c"
+            exit 1
+          fi
+
+          LSM_HEADER="common/include/linux/lsm_hooks.h"
+
+          if [[ ! -f "$LSM_HEADER" ]]; then
+            LSM_HEADER="$(find . -path '*/include/linux/lsm_hooks.h' | head -n 1)"
+          fi
+
+          if [[ -z "$LSM_HEADER" || ! -f "$LSM_HEADER" ]]; then
+            echo "Could not find lsm_hooks.h"
+            exit 1
+          fi
+
+          echo "Patching SukiSU LSM hook file: $LSM_FILE"
+          echo "Using LSM header: $LSM_HEADER"
+
+          if grep -q 'LSM_ID_UNDEF' "$LSM_HEADER"; then
+            USE_LSM_ID_UNDEF=true
+          else
+            USE_LSM_ID_UNDEF=false
+          fi
+
+          echo "USE_LSM_ID_UNDEF=$USE_LSM_ID_UNDEF"
+
+          python3 - "$LSM_FILE" "$USE_LSM_ID_UNDEF" <<'PY'
+          import sys
+          import re
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          use_lsm_id_undef = sys.argv[2] == "true"
+
+          text = path.read_text()
+
+          old_call = 'security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");'
+
+          if use_lsm_id_undef:
+              lsmid_block = '''
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+          static const struct lsm_id ksu_lsmid = {
+              .name = "ksu",
+              .id = LSM_ID_UNDEF,
+          };
+          #endif
+
+          '''
+          else:
+              lsmid_block = '''
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+          static const struct lsm_id ksu_lsmid = {
+              .name = "ksu",
+          };
+          #endif
+
+          '''
+
+          new_call = '''#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
+              security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), &ksu_lsmid);
+          #else
+              security_add_hooks(ksu_hooks, ARRAY_SIZE(ksu_hooks), "ksu");
+          #endif'''
+
+          if old_call not in text and '&ksu_lsmid' in text:
+              print("LSM API patch already appears to be applied.")
+              path.write_text(text)
+              sys.exit(0)
+
+          if 'static const struct lsm_id ksu_lsmid' not in text:
+              marker = 'static struct security_hook_list ksu_hooks[]'
+              if marker not in text:
+                  print("Could not find ksu_hooks marker.")
+                  sys.exit(1)
+
+              text = text.replace(marker, lsmid_block + marker, 1)
+
+          if old_call in text:
+              text = text.replace(old_call, new_call, 1)
+          else:
+              text = re.sub(
+                  r'security_add_hooks\(\s*ksu_hooks\s*,\s*ARRAY_SIZE\(ksu_hooks\)\s*,\s*"ksu"\s*\)\s*;',
+                  new_call,
+                  text,
+                  count=1,
+              )
+
+          path.write_text(text)
+          PY
+
+          echo "::group::SukiSU LSM hook preview"
+          grep -n -A10 -B10 'ksu_lsmid\|security_add_hooks' "$LSM_FILE"
+          echo "::endgroup::"
 
       - name: Apply UNICODE_BYPASS
         if: ${{ github.event.inputs.UNICODE_BYPASS == 'true' }}
