@@ -1618,13 +1618,67 @@ jobs:
 
           ccache -s
 
-      - name: Upload Build Config
+      - name: Collect Build Config
         if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: config-${{ matrix.FILE }}
-          path: kernel_workspace/kernel_platform/common/out/.config
-          if-no-files-found: ignore
+        run: |
+          set -euo pipefail
+
+          echo "::group::Collect build .config"
+
+          ARTIFACT_DIR="kernel_workspace/kernel_platform/out/artifacts/configs"
+          mkdir -p "$ARTIFACT_DIR"
+
+          echo "Searching for .config files under kernel_workspace/kernel_platform..."
+
+          mapfile -t CONFIG_CANDIDATES < <(
+            find kernel_workspace/kernel_platform \
+              -type f \
+              -name ".config" \
+              2>/dev/null | sort
+          )
+
+          if [ "${#CONFIG_CANDIDATES[@]}" -eq 0 ]; then
+            echo "::warning title=.config not found::No .config file was found under kernel_workspace/kernel_platform."
+
+            echo "::group::Output directory diagnostics"
+            find kernel_workspace/kernel_platform \
+              -maxdepth 5 \
+              \( -type d -name out -o -type d -name bazel-bin -o -type d -name dist \) \
+              -print 2>/dev/null || true
+            echo "::endgroup::"
+
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          echo "Found .config candidates:"
+          printf ' - %s\n' "${CONFIG_CANDIDATES[@]}"
+
+          BEST_CONFIG=""
+
+          for candidate in "${CONFIG_CANDIDATES[@]}"; do
+            if grep -qE 'CONFIG_(KSU|RUST|LTO|LOCALVERSION)' "$candidate" 2>/dev/null; then
+              BEST_CONFIG="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$BEST_CONFIG" ]; then
+            BEST_CONFIG="${CONFIG_CANDIDATES[0]}"
+          fi
+
+          echo "Selected config: $BEST_CONFIG"
+
+          cp "$BEST_CONFIG" "$ARTIFACT_DIR/${{ matrix.FILE }}.config"
+
+          echo "::group::Selected config preview"
+          grep -nEi 'KSU|KERNELSU|SUSFS|SUKISU|RUST|BINDER.*RUST|ANDROID_BINDER_IPC_RUST|LTO|LOCALVERSION|CFI|SHADOW_CALL_STACK' \
+            "$ARTIFACT_DIR/${{ matrix.FILE }}.config" || true
+          echo "::endgroup::"
+
+          echo "CONFIG_ARTIFACT_PATH=$ARTIFACT_DIR/${{ matrix.FILE }}.config" >> "$GITHUB_ENV"
+
+          echo "::endgroup::"    
           
       - name: Prepare AnyKernel3 Package
         id: ak3_prepare
