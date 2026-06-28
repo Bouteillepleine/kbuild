@@ -104,7 +104,7 @@ on:
         type: boolean
         description: "Enable critical partition write protection module, BBG"
         required: true
-        default: true
+        default: false
 
       NETFILTER:
         type: boolean
