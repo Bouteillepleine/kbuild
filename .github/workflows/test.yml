@@ -888,7 +888,24 @@ jobs:
               echo "SUSFS_META is empty. Using the latest upstream SUSFS."
             fi
 
-            SUSVER=$(git rev-parse --short HEAD || echo unknown)
+            SUSVER="$(grep -RhoP 'SUSFS_VERSION[[:space:]]+"?v?\K[0-9]+(\.[0-9]+)*' . 2>/dev/null | head -n 1 || true)"
+
+            if [[ -z "$SUSVER" ]]; then
+              SUSVER="$(grep -RhoP 'SUSFS_VERSION[[:space:]]*=[[:space:]]*"?v?\K[0-9]+(\.[0-9]+)*' . 2>/dev/null | head -n 1 || true)"
+            fi
+
+            if [[ -z "$SUSVER" ]]; then
+              SUSVER="$(grep -RhoP 'SUSFS_VERSION[[:space:]]*:[[:space:]]*v?\K[0-9]+(\.[0-9]+)*' . 2>/dev/null | head -n 1 || true)"
+            fi
+
+            if [[ -z "$SUSVER" ]]; then
+              SUSVER="$(git rev-parse --short HEAD || echo unknown)"
+              echo "Could not detect SUSFS version. Falling back to commit hash: $SUSVER"
+            else
+              echo "Detected SUSFS version: $SUSVER"
+            fi
+
+            echo "Final SUSFS version label: $SUSVER"
             echo "SUSVER=$SUSVER" >> "$GITHUB_ENV"
 
             cd ..
@@ -1527,7 +1544,7 @@ jobs:
           KSU_VERSION="${KSUVER:-unknown}"
           SUSFS_VERSION="${SUSVER:-unknown}"
 
-          ZIP_NAME="AK3_${ZIP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_${KSU_TYPE}_${KSU_VERSION}_SuSFS_${SUSFS_VERSION}.zip"
+          ZIP_NAME="AK3_${ZIP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_${KSU_TYPE}_${KSU_VERSION}_SusFS_${SUSFS_VERSION}.zip"
           ZIP_NAME="$(echo "$ZIP_NAME" | tr ' ' '_' | tr -cd 'A-Za-z0-9._+-')"
 
           echo "ZIP_NAME=$ZIP_NAME"
