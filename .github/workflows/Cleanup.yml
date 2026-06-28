@@ -1,15 +1,33 @@
-name: Cleanup Actions caches (ccache)
+name: Cleanup Actions Caches
 
 on:
   workflow_dispatch:
     inputs:
       prefix:
-        description: "Delete caches with key starting with this prefix"
+        description: "Delete caches matching this prefix. Use 'all' to target all known cache types."
+        required: false
+        type: choice
+        default: "ccache-"
+        options:
+          - "ccache-"
+          - "thinlto-"
+          - "apt-cache-"
+          - "all"
+
+      branch_filter:
+        description: "Only delete caches from this branch name (e.g. main). Leave empty to match all branches."
         required: false
         type: string
-        default: "ccache-"
+        default: ""
+
+      file_filter:
+        description: "Only delete caches matching this kernel config name (e.g. oneplus_15). Leave empty to match all."
+        required: false
+        type: string
+        default: ""
+
       dry_run:
-        description: "List caches but do not delete"
+        description: "List matched caches but do not delete"
         required: true
         type: boolean
         default: true
@@ -20,86 +38,183 @@ permissions:
 
 jobs:
   cleanup:
+    name: "Cleanup caches [prefix=${{ inputs.prefix }}] [dry_run=${{ inputs.dry_run }}]"
     runs-on: ubuntu-latest
+
     steps:
-      - name: List & delete caches by prefix
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREFIX: ${{ inputs.prefix }}
-          DRY_RUN: ${{ inputs.dry_run }}
-          REPO: ${{ github.repository }}
+      - name: Resolve target prefixes
+        id: resolve
         shell: bash
         run: |
           set -euo pipefail
 
+          INPUT="${{ inputs.prefix }}"
+
+          if [[ "$INPUT" == "all" ]]; then
+            PREFIXES="ccache- thinlto- apt-cache-"
+          else
+            PREFIXES="$INPUT"
+          fi
+
+          echo "PREFIXES=$PREFIXES" >> "$GITHUB_ENV"
+          echo "Resolved prefixes: $PREFIXES"
+
+      - name: List & delete caches by prefix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REPO: ${{ github.repository }}
+          BRANCH_FILTER: ${{ inputs.branch_filter }}
+          FILE_FILTER: ${{ inputs.file_filter }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          urlencode() {
+            jq -rn --arg v "$1" '$v|@uri'
+          }
+
           echo "::group::Inputs"
-          echo "Repo: $REPO"
-          echo "Prefix: $PREFIX"
-          echo "Dry run: $DRY_RUN"
+          echo "Repo         : $REPO"
+          echo "Prefixes     : $PREFIXES"
+          echo "Branch filter: ${BRANCH_FILTER:-<any>}"
+          echo "File filter  : ${FILE_FILTER:-<any>}"
+          echo "Dry run      : $DRY_RUN"
           echo "::endgroup::"
 
-          # Fetch up to 100 caches per page, loop pages
-          page=1
-          total=0
-          matched=0
-          deleted=0
+          grand_total=0
+          grand_matched=0
+          grand_deleted=0
+          grand_bytes=0
 
-          while :; do
-            echo "::group::Fetching caches page $page"
-            resp="$(curl -fsSL \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/$REPO/actions/caches?per_page=100&page=$page")"
+          for PREFIX in $PREFIXES; do
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "Processing prefix: $PREFIX"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            count="$(echo "$resp" | jq '.actions_caches | length')"
-            total=$((total + count))
-            echo "Caches in this page: $count"
-            echo "::endgroup::"
+            prefix_total=0
+            prefix_matched=0
+            prefix_deleted=0
+            prefix_bytes=0
 
-            # Break if no more caches
-            if [ "$count" -eq 0 ]; then
-              break
-            fi
+            tmp_items="$(mktemp)"
+            : > "$tmp_items"
 
-            # Extract matching caches (id + key)
-            mapfile -t items < <(echo "$resp" | jq -r --arg p "$PREFIX" '
-              .actions_caches[]
-              | select(.key | startswith($p))
-              | "\(.id)\t\(.key)\t\(.size_in_bytes)"
-            ')
+            page=1
 
-            if [ "${#items[@]}" -gt 0 ]; then
-              matched=$((matched + ${#items[@]}))
+            while :; do
+              echo "::group::[$PREFIX] Fetching page $page"
 
-              echo "::group::Matched caches (page $page)"
-              printf '%s\n' "${items[@]}" | awk -F'\t' '{printf "id=%s  size=%s  key=%s\n",$1,$3,$2}'
+              query="per_page=100&page=$page&key=$(urlencode "$PREFIX")"
+
+              if [[ -n "$BRANCH_FILTER" ]]; then
+                query="${query}&ref=$(urlencode "refs/heads/$BRANCH_FILTER")"
+              fi
+
+              resp="$(curl -fsSL \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/$REPO/actions/caches?$query")"
+
+              count="$(echo "$resp" | jq '.actions_caches | length')"
+              prefix_total=$((prefix_total + count))
+
+              echo "Caches on page $page: $count"
+              echo "::endgroup::"
+
+              if [ "$count" -eq 0 ]; then
+                break
+              fi
+
+              echo "$resp" | jq -r \
+                --arg p "$PREFIX" \
+                --arg b "$BRANCH_FILTER" \
+                --arg f "$FILE_FILTER" '
+                .actions_caches[]
+                | select(.key | startswith($p))
+                | select($b == "" or (.ref == ("refs/heads/" + $b)))
+                | select($f == "" or (.key | contains($f)))
+                | "\(.id)\t\(.key)\t\(.size_in_bytes)\t\(.ref // "unknown")\t\(.last_accessed_at // "unknown")"
+              ' >> "$tmp_items"
+
+              page=$((page + 1))
+            done
+
+            if [[ -s "$tmp_items" ]]; then
+              prefix_matched="$(wc -l < "$tmp_items" | tr -d ' ')"
+
+              echo "::group::[$PREFIX] Matched caches"
+              printf '%-12s %-10s %-20s %-55s %s\n' "ID" "SIZE(MB)" "LAST_ACCESSED" "KEY" "REF"
+              printf '%-12s %-10s %-20s %-55s %s\n' "──────────" "────────" "──────────────────" "─────────────────────────────────────────────────────" "──────────────────────"
+
+              while IFS=$'\t' read -r id key size_bytes ref accessed; do
+                size_mb=$(awk "BEGIN {printf \"%.2f\", $size_bytes/1048576}")
+                prefix_bytes=$((prefix_bytes + size_bytes))
+                printf '%-12s %-10s %-20s %-55s %s\n' "$id" "${size_mb}MB" "${accessed:0:19}" "$key" "$ref"
+              done < "$tmp_items"
+
               echo "::endgroup::"
 
               if [ "$DRY_RUN" = "true" ]; then
-                echo "Dry-run enabled: skipping delete for page $page."
+                echo "Dry-run enabled: skipping deletion for prefix $PREFIX."
               else
-                for line in "${items[@]}"; do
-                  id="$(cut -f1 <<< "$line")"
-                  key="$(cut -f2 <<< "$line")"
+                echo "::group::[$PREFIX] Deleting matched caches"
 
-                  echo "Deleting cache id=$id key=$key"
-                  curl -fsSL -X DELETE \
+                while IFS=$'\t' read -r id key size_bytes ref accessed; do
+                  http_code=$(curl -sSL -o /dev/null -w "%{http_code}" -X DELETE \
                     -H "Accept: application/vnd.github+json" \
                     -H "Authorization: Bearer $GH_TOKEN" \
                     -H "X-GitHub-Api-Version: 2022-11-28" \
-                    "https://api.github.com/repos/$REPO/actions/caches/$id" >/dev/null
+                    "https://api.github.com/repos/$REPO/actions/caches/$id")
 
-                  deleted=$((deleted + 1))
-                done
+                  if [[ "$http_code" == "204" ]]; then
+                    echo "✅ Deleted  id=$id  key=$key"
+                    prefix_deleted=$((prefix_deleted + 1))
+                  elif [[ "$http_code" == "404" ]]; then
+                    echo "ℹ️ Already gone  id=$id  key=$key"
+                  else
+                    echo "⚠️ Failed HTTP $http_code  id=$id  key=$key"
+                  fi
+                done < "$tmp_items"
+
+                echo "::endgroup::"
               fi
+            else
+              echo "[$PREFIX] No matching caches found."
             fi
 
-            page=$((page + 1))
+            rm -f "$tmp_items"
+
+            prefix_mb=$(awk "BEGIN {printf \"%.2f\", $prefix_bytes/1048576}")
+
+            echo "::group::[$PREFIX] Subtotal"
+            echo "  Scanned : $prefix_total"
+            echo "  Matched : $prefix_matched"
+            echo "  Deleted : $prefix_deleted"
+            echo "  Size    : ${prefix_mb} MB"
+            echo "::endgroup::"
+
+            grand_total=$((grand_total + prefix_total))
+            grand_matched=$((grand_matched + prefix_matched))
+            grand_deleted=$((grand_deleted + prefix_deleted))
+            grand_bytes=$((grand_bytes + prefix_bytes))
           done
 
-          echo "::group::Summary"
-          echo "Total caches scanned: $total"
-          echo "Matched prefix '$PREFIX': $matched"
-          echo "Deleted: $deleted"
+          grand_mb=$(awk "BEGIN {printf \"%.2f\", $grand_bytes/1048576}")
+
+          echo ""
+          echo "::group::Grand Summary"
+          printf '%-20s %s\n' "Total scanned:" "$grand_total"
+          printf '%-20s %s\n' "Total matched:" "$grand_matched"
+          printf '%-20s %s\n' "Total deleted:" "$grand_deleted"
+          printf '%-20s %s\n' "Total size:" "${grand_mb} MB"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo ""
+            echo "ℹ️ Dry-run was enabled. No caches were deleted."
+            echo "   Re-run with dry_run=false to perform actual deletion."
+          fi
+
           echo "::endgroup::"
