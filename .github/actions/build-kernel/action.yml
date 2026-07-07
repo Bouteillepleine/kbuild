@@ -2527,12 +2527,8 @@ runs:
         
         sed -i 's/do.check_boot_version=.*/do.check_boot_version=1/' anykernel.sh
         
-        case "$OP_BRANCH" in
-          wild/sm8850|wild/sm8845)
-            echo "Applying BBG efisp abl whitelist control patch"
-            patch -p1 < "$KERNEL_PATCHES_FOLDER/common/bbg/0001-Enable-volume-input-to-enable-bbg-efisp-patch.patch"
-          ;;
-        esac
+        # BBG efisp/abl whitelist flash control is baked into the AnyKernel3
+        # (Bouteillepleine/AnyKernel3 gki-2.0) — no build-time anykernel.sh patch needed.
         
         ZIP_MODEL=$(echo "$OP_MODEL" | sed 's/-[0-9]\+\.[0-9]\+\.[0-9]\+$//')
         if [ "${{ env.OP_SUSFS }}" = true ]; then
