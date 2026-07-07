@@ -1,149 +1,93 @@
 <div align="center">
 
-# 🔥 Wild Kernels for OnePlus (Oppo/Realme)
+# OnePlus ● ReSukiSU ● SUSFS
 
-[![KernelSU-Next](https://img.shields.io/badge/KernelSU_Next-Supported-green)](https://kernelsu-next.github.io/webpage/)
-[![KernelSU](https://img.shields.io/badge/KernelSU-Supported-green)](https://kernelsu.org/)
-[![Wild KSU](https://img.shields.io/badge/Wild_KSU-Not%20Supported-cb2431)](https://github.com/WildKernels/Wild_KSU/)
-[![SUSFS](https://img.shields.io/badge/SUSFS-Integrated-orange?logo=gitlab)](https://gitlab.com/simonpunk/susfs4ksu)
-[![OnePlusOSS Tracking Status](https://img.shields.io/badge/OnePlusOSS--Tracker-active-green)](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/blob/status-page/README.md)
+### Wild Fork
 
 </div>
 
----
+This repository provides GitHub Actions workflows to automatically build flashable AnyKernel3 ZIPs for multiple OnePlus devices with integrated **ReSukiSU** and **SUSFS** support.
 
-## ⚠️ Disclaimer
+## 🌟 Features
 
-Flashing this kernel will not void your warranty, but there is always a risk of bricking your device. Please make sure to:
-- 💾 Back up your data
-- 🧠 Understand the risks before proceeding
+- **ReSukiSU** - Kernel-level root solution
+- **SUSFS** - Super User File System support
+- **Baseband Guard LSM** - Optional extra security layer
+- **WireGuard** - Modern VPN support built into the kernel
+- **Magic Mount** - Advanced mounting support
+- **TMPFS_XATTR / Mountify** - Extended attribute support for tmpfs
+- **BBR & ECN** - TCP/network optimizations
+- **sched_ext** - Extensible scheduler framework for supported kernels
+- **AnyKernel3 ZIPs** - Flashable kernel packages
 
-- I am **not responsible** for bricked devices, damaged hardware, or any issues that arise from using this kernel.
+## 📱 Supported Devices
 
-- **Please** do thorough research and fully understand the features added in this kernel before flashing it!
+OnePlus devices supported by the available configs.
 
-- By flashing this kernel, **YOU** are choosing to make these modifications. If something goes wrong, **do not blame me**!
+Check:
 
-<div align="center">
-  
-# **🚨 Proceed at your own risk!**
+```text
+configs/
+```
 
-</div>
+## 🚀 Installation
 
----
+1. Download the latest kernel ZIP for your device from **Releases**.
+2. Flash the AnyKernel3 ZIP with **Kernel Flasher** or another compatible kernel flashing app.
+3. Reboot.
+4. Open **ReSukiSU Manager** and verify root.
 
-## 🔧 Available Kernels
+## 🔧 Build Artifacts
 
-<div align="center">
+Each build can produce:
 
-| Kernel | Repository | Status |
-|--------|------------|--------|
-| 🏗️ **GKI** | [GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS) | ✅ Active |
-| 👑 **Sultan** | [Sultan_KernelSU_SUSFS](https://github.com/WildKernels/Sultan_KernelSU_SUSFS) | ✅ Active |
-| 📱 **OnePlus/Oppo/Realme** | [OnePlus_KernelSU_SUSFS](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS) | ✅ Active |
-| 📱 **Samsung** | [Samsung_KernelSU_SUSFS](https://github.com/WildKernels/Samsung_KernelSU_SUSFS) | ✅ Active |
-</div>
+- Flashable **AnyKernel3 ZIP**
+- Build metadata
+- Release notes
+- Logs and summaries
 
----
+## 🛠️ Building
 
-## 🔗 Additional Resources
+Use GitHub Actions:
 
-- 🩹 [Kernel Patches](https://github.com/WildKernels/kernel_patches)
-- ⚡ [Kernel Flasher](https://github.com/fatalcoder524/KernelFlasher)
+```text
+Actions → Build and Release OnePlus Kernels → Run workflow
+```
 
----
+Use ReSukiSU option:
 
-## 📱 Device Compatibility
+```json
+[{"type":"rsksu","hash":"main"}]
+```
 
-- Please verify the device compatibility before flashing here: [Compatibility_Info](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/blob/main/compatibility.md). 
+## 📋 Requirements
 
----
+- Unlocked bootloader
+- Compatible OnePlus device
+- Matching OS/kernel version
+- Basic knowledge of flashing custom kernels
 
-## 📱 OnePlusOSS Repositories Tracking
+## 🔗 Links
 
-- 📊 **Live Dashboard**: [OnePlus Repos Tracking & Changes](https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/blob/status-page/README.md)
-- ⏱️ **Update Frequency**: Every 2 hours (Automated)
----
-
-## ✨ Features
-
-- 🔐 **KernelSU / KernelSU-Next**: A root solution for Android GKI devices that works in kernel mode and grants root permission to userspace applications directly in kernel space
-- 🔥 **WildKSU Manager Support**: Support for the Root Manager developed by our team with lots of customisations
-- 🥷 **SUSFS**: An addon root hiding kernel patches and userspace module for KernelSU
-- 🛡️ **BBG**: LSM-based Baseband Guard security to protect critical device partitions. abl/efisp can be added to whitelist for efisp exploit devices.
-- 🛠️ **HMBIRD SCX**: Scheduler extensions for SM8750/MT6991 devices
-- 🖧 **BBRv1**: Improved TCP congestion control
-- 🖧 **BBRv3**: Improved TCP congestion control
-- 🚦 **CAKE and PIE qdisc Support**: Better Net Schedulers
-- ✅ **LTO**: Link Time Optimisation enabled
-- 🚀 **Optimisation patches**: Memory, I/O, CPU scheduler, network and other general tunings
-- 🌐 **TTL Target Support**: Network packet manipulation
-- 🧱 **IP Set & IPv6 NAT Support**: Advanced firewall capabilities and IPv6 NAT Support
-- ⚡️ **TMPFS XATTR / POSIX ACL**: Extended TMPFS support for meta modules and Mountify
-- </> **Unicode Bypass Fix**: Prevent path traversal and other detections using non-printable Unicode codepoints [Experimental]
-- 🖥️ **Droidspaces Support**: Support Portable Linux containers to run full Linux environments.
-- 🔃 **NTSync**: Provide high-performance, low-latency synchronization primitives compatible with the Windows NT kernel API
-
----
-
-## 📋 Installation Instructions
-
-For GKI installation, please follow the official guide:
-
-📖 **[KernelSU Installation Guide](https://kernelsu.org/guide/installation.html)**
-
-You can also find Installation instructions in the release notes.
-
----
-
-## 🌟 Special Thanks
-
-**These amazing people help make this project possible! ❤️**
-
-<div align="center">
-
-
-| 🔧 **Project** | 👨‍💻 **Developer** | 🔗 **Link** |
-|:---------------:|:----------------:|:-----------:|
-| **KernelSU** | tiann | [![GitHub](https://img.shields.io/badge/GitHub-tiann-blue?style=flat-square&logo=github)](https://github.com/tiann/KernelSU) |
-| **KernelSU-Next** | rifsxd | [![GitHub](https://img.shields.io/badge/GitHub-rifsxd-blue?style=flat-square&logo=github)](https://github.com/KernelSU-Next/KernelSU-Next) |
-| **Magic-KSU** | 5ec1cff | [![GitHub](https://img.shields.io/badge/GitHub-5ec1cff-blue?style=flat-square&logo=github)](https://github.com/5ec1cff/KernelSU) |
-| **SUSFS** | simonpunk | [![GitLab](https://img.shields.io/badge/GitLab-simonpunk-orange?style=flat-square&logo=gitlab)](https://gitlab.com/simonpunk/susfs4ksu.git) |
-| **SUSFS Module** | sidex15 | [![GitHub](https://img.shields.io/badge/GitHub-sidex15-blue?style=flat-square&logo=github)](https://github.com/sidex15) |
-| **Sultan Kernels** | kerneltoast | [![GitHub](https://img.shields.io/badge/GitHub-kerneltoast-blue?style=flat-square&logo=github)](https://github.com/kerneltoast) |
-| **Baseband Guard** | vc-teahouse | [![GitHub](https://img.shields.io/badge/GitHub-vc--teahouse-blue?style=flat-square&logo=github)](https://github.com/vc-teahouse/Baseband-guard.git) |
-| **Droidspaces** | ravindu644 | [![GitHub](https://img.shields.io/badge/GitHub-ravindu644-blue?style=flat-square&logo=github)](https://github.com/ravindu644/Droidspaces-OSS.git) |
-
-</div>
-
-*If you have contributed and are not listed here, please remind me!* 🙏
-
----
-
-## 💬 Support
-
-If you encounter any issues or need help, feel free to:
-- 🐛 Open an issue in this repository
-- 💬 Reach out to me directly
-
----
-
-## 📱 Connect With Us
-
-<div align="center">
-  
-[![Telegram](https://img.shields.io/badge/Telegram-fatalcoder524-blue?logo=telegram)](https://t.me/anonymous_yolo)
-[![Telegram Group](https://img.shields.io/badge/Telegram-WildKernels-blue?logo=telegram)](https://t.me/WildKernelsTG)
-
-</div>
-
----
+- [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU)
+- [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
+- [Kernel Flasher](https://github.com/fatalcoder524/KernelFlasher)
+- [Releases](https://github.com/Bouteillepleine/ReSukiSu_Oneplus-/releases)
 
 ## 💝 Donations
 
 Any and all donations are appreciated!
 
-PayPal: [paypal.me/fatalcoder524](https://paypal.me/fatalcoder524)
+- PayPal: [paypal.me/fatalcoder524](https://paypal.me/fatalcoder524)
+- DM on Telegram for UPI donations!
 
-DM on Telegram for UPI donations!
+## 🤝 Acknowledgments
 
+Thanks to:
+
+- ReSukiSU
+- susfs4ksu by simonpunk
+- AnyKernel3 by osm0sis and contributors
+- WildKernels
+- OnePlusOSS
+- Community testers and contributors
