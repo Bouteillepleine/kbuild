@@ -1534,7 +1534,6 @@ runs:
         echo "✅ Other patches applied"
         echo "::endgroup::"
 
-
     - name: Apply Optimisation Patches
       if: ${{ env.OP_OPT == 'true' }}
       shell: bash
@@ -1688,6 +1687,9 @@ runs:
         CONFIG_TCP_CONG_ADVANCED=y
         CONFIG_TCP_CONG_BBR=y
         EOF
+
+        echo "✅ BBR patches applied"
+        echo "::endgroup::"
 
     - name: Apply BBRv3
       if: ${{ env.OP_BBR3 == 'true' }}
