@@ -920,9 +920,10 @@ runs:
 
         echo "Downloading ReSukiSU setup script..."
         if ! curl --fail --location --proto '=https' --tlsv1.2 -LSs \
+          --retry 5 --retry-delay 5 --retry-all-errors \
           "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
           -o "$RSKSU_SETUP_SCRIPT"; then
-          echo "::error::Failed to download ReSukiSU setup.sh"
+          echo "::error::Failed to download ReSukiSU setup.sh after retries"
           exit 1
         fi
 
