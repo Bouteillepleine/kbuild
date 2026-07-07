@@ -350,7 +350,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          sudo apt-get update -qq
+          # Hosted runners intermittently ship a broken Microsoft/azure-cli apt repo
+          # (packages.microsoft.com "no longer signed"), which makes apt-get update
+          # exit non-zero. Drop those third-party lists so update only hits the valid
+          # Ubuntu repos, and don't let a partial update fail the step.
+          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
+                     /etc/apt/sources.list.d/azure-cli.list 2>/dev/null || true
+          sudo apt-get update -qq || true
           sudo apt-get install -y --no-install-recommends aria2 pigz
           sudo apt-get clean
 
