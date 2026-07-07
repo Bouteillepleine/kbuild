@@ -1934,15 +1934,6 @@ runs:
           [[ -n "$mod" ]] && modules+=("$mod")
         done
         
-        if [ "$OP_BBR" = "true" ] || [ "$OP_BBR3" = "true" ]; then
-          if [[ ! " ${modules[*]} " =~ " oplus_network_tuning " ]]; then
-            modules+=("oplus_network_tuning")
-          fi
-          if [[ ! " ${modules[*]} " =~ " oplus_networks_tuning " ]]; then
-            modules+=("oplus_networks_tuning")
-          fi
-        fi
-        
         # Safety Validation Loop (Filter out risky modules)
         declare -a validated_modules=()
         for mod in "${modules[@]}"; do
