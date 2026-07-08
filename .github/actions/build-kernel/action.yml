@@ -2780,7 +2780,12 @@ runs:
           echo "Size before trim:"
           du -sh "$LDCACHE_DIR" || true
 
-          find "$LDCACHE_DIR" -type f -mmin +360 -delete || true
+          # Evict by access time, not mtime: ld.lld never updates a cache
+          # entry's mtime when it reuses it, so an mtime-based trim deletes the
+          # entire restored/reused cache on cache-hit builds — collapsing the
+          # saved archive to a few hundred bytes. atime tracks reuse and keeps
+          # the live working set.
+          find "$LDCACHE_DIR" -type f -amin +360 -delete || true
           find "$LDCACHE_DIR" -type d -empty -delete     || true
 
           echo "Size after trim:"
