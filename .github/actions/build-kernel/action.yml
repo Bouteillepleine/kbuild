@@ -1968,9 +1968,9 @@ runs:
         KERNEL_VERSION="${{ env.KERNEL_VER }}"
         MIN_VERSION="5.16"
         if [ "$(printf '%s\n' "$KERNEL_VERSION" "$MIN_VERSION" | sort -V | head -n1)" = "$KERNEL_VERSION" ]; then
-          curl -Ls https://raw.githubusercontent.com/fatalcoder524/kernel_patches_additional/refs/heads/main/experimental/0001-Support-conditional-vendor-modules-blacklisting-5.15-and-below.patch | patch -p1
+          curl -Ls https://raw.githubusercontent.com/Bouteillepleine/kernel_patches/main/experimental/0001-Support-conditional-vendor-modules-blacklisting-5.15-and-below.patch | patch -p1
         else
-          curl -Ls https://raw.githubusercontent.com/fatalcoder524/kernel_patches_additional/refs/heads/main/experimental/0001-Support-conditional-vendor-modules-blacklisting-6.1-and-above.patch | patch -p1
+          curl -Ls https://raw.githubusercontent.com/Bouteillepleine/kernel_patches/main/experimental/0001-Support-conditional-vendor-modules-blacklisting-6.1-and-above.patch | patch -p1
         fi
         
 
