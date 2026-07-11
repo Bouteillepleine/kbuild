@@ -14,7 +14,7 @@
   "rust_build": true,
   "disk_cleanup": true,
   "hmbird": false,
-  "susfs": false,
+  "susfs": true,
   "opt": false,
   "ds": false,
   "bbg": false,
