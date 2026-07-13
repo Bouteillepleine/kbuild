@@ -1,6 +1,9 @@
 name: 🧹 Cleanup Caches and Workflow Runs
 
 on:
+  schedule:
+    # Weekly automatic cleanup — Sundays 04:00 UTC
+    - cron: '0 4 * * 0'
   workflow_dispatch:
     inputs:
       cleanup_type:
@@ -131,9 +134,23 @@ on:
         type: boolean
         default: false
 
+      release_cache_age_days:
+        description: 'Release caches (ccache/lto/toolchain): delete assets older than N days'
+        required: false
+        default: '30'
+
+      keep_recent_assets:
+        description: 'Release caches: always keep N newest assets per release (safety floor)'
+        required: false
+        default: '4'
+
 permissions:
   actions: write
-  contents: read
+  contents: write
+
+concurrency:
+  group: cleanup-${{ github.workflow }}
+  cancel-in-progress: false
 
 jobs:
   analyze:
@@ -464,8 +481,8 @@ jobs:
     if: |
       always() &&
       needs.analyze.result == 'success' &&
-      (inputs.cleanup_type == 'cache_only' || inputs.cleanup_type == 'full_cleanup') &&
-      inputs.cleanup_type != 'analyze_only'
+      ((inputs.cleanup_type || 'full_cleanup') == 'cache_only' || (inputs.cleanup_type || 'full_cleanup') == 'full_cleanup') &&
+      (inputs.cleanup_type || 'full_cleanup') != 'analyze_only'
 
     steps:
       - name: 🗑️ Smart Cache Cleanup
@@ -474,12 +491,12 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
 
-            const deviceFilter = '${{ inputs.device_filter }}';
-            const cachePattern = '${{ inputs.cache_pattern }}';
-            const dryRun = '${{ inputs.dry_run }}' === 'true';
-            const cacheAgeDays = Number.parseInt('${{ inputs.cache_age_days }}', 10);
+            const deviceFilter = '${{ inputs.device_filter || 'ALL' }}';
+            const cachePattern = '${{ inputs.cache_pattern || 'old_only' }}';
+            const dryRun = '${{ inputs.dry_run || 'false' }}' === 'true';
+            const cacheAgeDays = Number.parseInt('${{ inputs.cache_age_days || '7' }}', 10);
             const shouldCleanup = '${{ needs.analyze.outputs.should_cleanup }}' === 'true';
-            const forceCleanup = '${{ inputs.force_cleanup }}' === 'true';
+            const forceCleanup = '${{ inputs.force_cleanup || 'false' }}' === 'true';
 
             function formatMB(bytes) {
               return (bytes / 1024 / 1024).toFixed(2);
@@ -778,8 +795,8 @@ jobs:
     if: |
       always() &&
       needs.analyze.result == 'success' &&
-      (inputs.cleanup_type == 'runs_only' || inputs.cleanup_type == 'full_cleanup') &&
-      inputs.cleanup_type != 'analyze_only'
+      ((inputs.cleanup_type || 'full_cleanup') == 'runs_only' || (inputs.cleanup_type || 'full_cleanup') == 'full_cleanup') &&
+      (inputs.cleanup_type || 'full_cleanup') != 'analyze_only'
 
     steps:
       - name: 🗑️ Clean Old Workflow Runs
@@ -788,9 +805,9 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
 
-            const keepRecent = Number.parseInt('${{ inputs.keep_recent_runs }}', 10);
-            const daysToKeep = Number.parseInt('${{ inputs.days_to_keep }}', 10);
-            const dryRun = '${{ inputs.dry_run }}' === 'true';
+            const keepRecent = Number.parseInt('${{ inputs.keep_recent_runs || '3' }}', 10);
+            const daysToKeep = Number.parseInt('${{ inputs.days_to_keep || '7' }}', 10);
+            const dryRun = '${{ inputs.dry_run || 'false' }}' === 'true';
 
             const cutoffDate = new Date();
             cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
@@ -970,12 +987,152 @@ jobs:
 
             await summary.write();
 
+  cleanup-release-caches:
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: |
+      always() &&
+      needs.analyze.result == 'success' &&
+      ((inputs.cleanup_type || 'full_cleanup') == 'cache_only' || (inputs.cleanup_type || 'full_cleanup') == 'full_cleanup') &&
+      (inputs.cleanup_type || 'full_cleanup') != 'analyze_only'
+
+    steps:
+      - name: 🗑️ Prune Release-Asset Caches (ccache / lto / toolchain)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+
+            const cachePattern = '${{ inputs.cache_pattern || 'old_only' }}';
+            const deviceFilter = '${{ inputs.device_filter || 'ALL' }}';
+            const dryRun = '${{ inputs.dry_run || 'false' }}' === 'true';
+            const ageDaysThreshold = Number.parseInt('${{ inputs.release_cache_age_days || '30' }}', 10);
+            const keepRecent = Number.parseInt('${{ inputs.keep_recent_assets || '4' }}', 10);
+
+            function formatMB(b) { return (b / 1024 / 1024).toFixed(2); }
+            function formatGB(b) { return (b / 1024 / 1024 / 1024).toFixed(2); }
+            function ageDays(d) { return Math.floor((Date.now() - new Date(d).getTime()) / (1000 * 60 * 60 * 24)); }
+
+            // Map the selected pattern to which release-backed caches to prune.
+            // ccache_only / lto_only target a single release; the default (and
+            // scheduled runs) prune the two accumulating build caches. The
+            // toolchain mirror is only pruned under kernel_only, since deleting a
+            // live toolchain forces an expensive cold re-download from upstream.
+            let tags;
+            switch (cachePattern) {
+              case 'ccache_only': tags = ['ccache-cache']; break;
+              case 'lto_only':    tags = ['lto-cache']; break;
+              case 'kernel_only': tags = ['ccache-cache', 'lto-cache', 'toolchain-cache']; break;
+              default:            tags = ['ccache-cache', 'lto-cache']; break;
+            }
+
+            function matchesDeviceFilter(name) {
+              if (deviceFilter === 'ALL') return true;
+              return (name || '').includes(deviceFilter);
+            }
+
+            console.log('🎯 Release-cache prune configuration');
+            console.log(`Tags: ${tags.join(', ')}`);
+            console.log(`Device Filter: ${deviceFilter}`);
+            console.log(`Age Threshold: ${ageDaysThreshold} days`);
+            console.log(`Keep Newest per release: ${keepRecent}`);
+            console.log(`Dry Run: ${dryRun}`);
+
+            let grandDeleted = 0, grandFreed = 0, grandKept = 0, grandKeptSize = 0;
+            const perTagRows = [];
+            const failed = [];
+
+            for (const tag of tags) {
+              let release;
+              try {
+                release = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              } catch (e) {
+                console.log(`⚠️ Release '${tag}' not found — skipping (${e.status || e.message}).`);
+                perTagRows.push([tag, 'not found', '0', '0.00', '0', '0.00']);
+                continue;
+              }
+
+              // Paginate — releases like ccache-cache hold 100+ assets.
+              const assets = (await github.paginate(github.rest.repos.listReleaseAssets, {
+                owner, repo, release_id: release.data.id, per_page: 100,
+              })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // newest first
+
+              // Protect the N newest assets as a safety floor so a cache is never
+              // fully wiped even if every asset is older than the threshold.
+              const protectedIds = new Set(assets.slice(0, keepRecent).map(a => a.id));
+
+              let tagDeleted = 0, tagFreed = 0, tagKept = 0, tagKeptSize = 0;
+
+              for (const asset of assets) {
+                const age = ageDays(asset.created_at);
+                const size = asset.size || 0;
+                const del = matchesDeviceFilter(asset.name) && age >= ageDaysThreshold && !protectedIds.has(asset.id);
+
+                if (!del) { tagKept++; tagKeptSize += size; continue; }
+
+                console.log(`${dryRun ? '🔍 Would delete' : '🗑️ Deleting'} [${tag}] ${asset.name} — ${formatMB(size)} MB, ${age}d`);
+
+                if (dryRun) { tagDeleted++; tagFreed += size; continue; }
+
+                try {
+                  await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: asset.id });
+                  tagDeleted++; tagFreed += size;
+                } catch (e) {
+                  console.log(`   ⚠️ Failed: ${e.message}`);
+                  failed.push({ name: `${tag}/${asset.name}`, reason: e.message });
+                }
+              }
+
+              grandDeleted += tagDeleted; grandFreed += tagFreed;
+              grandKept += tagKept; grandKeptSize += tagKeptSize;
+              perTagRows.push([tag, String(assets.length), String(tagDeleted), formatGB(tagFreed), String(tagKept), formatGB(tagKeptSize)]);
+              console.log(`✅ [${tag}] ${dryRun ? 'would free' : 'freed'} ${formatGB(tagFreed)} GB across ${tagDeleted} asset(s); kept ${tagKept}.`);
+            }
+
+            let summary = core.summary
+              .addHeading(`🧹 Release-Cache Prune ${dryRun ? 'Preview' : 'Summary'}`)
+              .addTable([
+                [{ data: 'Metric', header: true }, { data: 'Value', header: true }],
+                ['Assets ' + (dryRun ? 'to Delete' : 'Deleted'), String(grandDeleted)],
+                ['Space ' + (dryRun ? 'to Free' : 'Freed'), `${formatGB(grandFreed)} GB`],
+                ['Assets Kept', String(grandKept)],
+                ['Kept Size', `${formatGB(grandKeptSize)} GB`],
+                ['Age Threshold', `${ageDaysThreshold} days`],
+                ['Keep Newest / release', String(keepRecent)],
+                ['Device Filter', deviceFilter],
+                ['Dry Run', dryRun ? 'Yes' : 'No'],
+              ])
+              .addRaw('\n### 📦 Per-Release Breakdown\n\n')
+              .addTable([
+                [
+                  { data: 'Release', header: true },
+                  { data: 'Assets', header: true },
+                  { data: dryRun ? 'Would Delete' : 'Deleted', header: true },
+                  { data: 'Freed (GB)', header: true },
+                  { data: 'Kept', header: true },
+                  { data: 'Kept (GB)', header: true },
+                ],
+                ...perTagRows,
+              ]);
+
+            if (failed.length > 0) {
+              summary
+                .addRaw('\n### ⚠️ Failed Deletions\n\n')
+                .addTable([
+                  [{ data: 'Asset', header: true }, { data: 'Reason', header: true }],
+                  ...failed.map(f => [f.name, f.reason]),
+                ]);
+            }
+
+            await summary.write();
+
   final-report:
     runs-on: ubuntu-latest
     needs:
       - analyze
       - cleanup-caches
       - cleanup-runs
+      - cleanup-release-caches
     if: always()
 
     steps:
@@ -985,7 +1142,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
 
-            const dryRun = '${{ inputs.dry_run }}' === 'true';
+            const dryRun = '${{ inputs.dry_run || 'false' }}' === 'true';
             const LIMIT_GB = 10;
             const LIMIT_BYTES = LIMIT_GB * 1024 * 1024 * 1024;
 
@@ -1293,5 +1450,29 @@ jobs:
             -f days_to_keep=7 \
             -f keep_recent_runs=3
           ```
+
+          ### Prune release caches (ccache + lto) older than 30 days
+
+          ```bash
+          gh workflow run cleanup.yml \
+            -f cleanup_type=cache_only \
+            -f cache_pattern=all_caches \
+            -f release_cache_age_days=30 \
+            -f keep_recent_assets=4
+          ```
+
+          ### Preview release-cache prune (dry run)
+
+          ```bash
+          gh workflow run cleanup.yml \
+            -f cleanup_type=cache_only \
+            -f cache_pattern=all_caches \
+            -f release_cache_age_days=30 \
+            -f dry_run=true
+          ```
+
+          > ℹ️ Runs automatically every **Sunday 04:00 UTC** (full cleanup: old workflow
+          > runs + release-cache prune of ccache/lto assets older than 30 days, keeping
+          > the 4 newest per release). `toolchain-cache` is pruned only via `kernel_only`.
 
           EOF
