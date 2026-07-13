@@ -12,10 +12,14 @@ on:
     paths: ['.github/workflows/bbr3-ab-crc.yml']
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
+  mirror:
+    uses: ./.github/workflows/mirror-toolchains.yml
+    secrets: inherit
+
   resolve:
     runs-on: ubuntu-latest
     outputs:
@@ -36,7 +40,7 @@ jobs:
           echo "PINNED  ksu=$ksu  susfs=$susfs"
 
   build:
-    needs: resolve
+    needs: [resolve, mirror]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
