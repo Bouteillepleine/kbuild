@@ -1,4 +1,4 @@
-name: 🔬 BBR3 A/B CRC (same-hash, drift-free)
+name: 🔬 BBR3 A/B CRC (same-hash, drift-free) v5
 
 # Builds OP15 bbr3=true AND bbr3=false from the SAME resolved SukiSU/susfs hash
 # (pinned once, so the 700-CRC per-build churn cancels out), then diffs
