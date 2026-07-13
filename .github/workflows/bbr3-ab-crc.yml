@@ -53,6 +53,12 @@ jobs:
             git curl ca-certificates build-essential clang lld flex bison \
             libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
             libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz
+      - name: Configure ccache env (action references these under set -u)
+        run: |
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache"   >> "$GITHUB_ENV"
+          echo "LDCACHE_DIR=${{ github.workspace }}/.ld_cache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=12G"                            >> "$GITHUB_ENV"
+          mkdir -p "${{ github.workspace }}/.ccache" "${{ github.workspace }}/.ld_cache"
       - name: Compose op_config_json (bbr3=${{ matrix.bbr3 }})
         id: cfg
         run: |
