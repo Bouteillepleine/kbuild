@@ -16,10 +16,6 @@ permissions:
   actions: read
 
 jobs:
-  mirror:
-    uses: ./.github/workflows/mirror-toolchains.yml
-    secrets: inherit
-
   resolve:
     runs-on: ubuntu-latest
     outputs:
@@ -40,7 +36,7 @@ jobs:
           echo "PINNED  ksu=$ksu  susfs=$susfs"
 
   build:
-    needs: [resolve, mirror]
+    needs: resolve
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -59,10 +55,25 @@ jobs:
             libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz
       - name: Configure ccache env (action references these under set -u)
         run: |
-          echo "CCACHE_DIR=${{ github.workspace }}/.ccache"   >> "$GITHUB_ENV"
-          echo "LDCACHE_DIR=${{ github.workspace }}/.ld_cache" >> "$GITHUB_ENV"
-          echo "CCACHE_MAXSIZE=12G"                            >> "$GITHUB_ENV"
-          mkdir -p "${{ github.workspace }}/.ccache" "${{ github.workspace }}/.ld_cache"
+          WS="${{ github.workspace }}"
+          mkdir -p "$WS/.ccache" "$WS/.ld_cache"
+          {
+            echo "CCACHE_DIR=$WS/.ccache"
+            echo "LDCACHE_DIR=$WS/.ld_cache"
+            echo "CCACHE_MAXSIZE=12G"
+            echo "CCACHE_COMPILERCHECK=content"
+            echo "CCACHE_BASEDIR=$WS"
+            echo "CCACHE_NOHASHDIR=true"
+            echo "CCACHE_IGNOREOPTIONS=--sysroot*"
+            echo "CCACHE_COMPRESSION=true"
+            echo "CCACHE_COMPRESSION_LEVEL=3"
+            echo "CCACHE_DIRECT=true"
+            echo "CCACHE_FILE_CLONE=true"
+            echo "CCACHE_INODE_CACHE=true"
+            echo "CCACHE_IS_KERNEL_COMPILING=true"
+            echo "CCACHE_UMASK=002"
+            echo "CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale"
+          } >> "$GITHUB_ENV"
       - name: Compose op_config_json (bbr3=${{ matrix.bbr3 }})
         id: cfg
         run: |
