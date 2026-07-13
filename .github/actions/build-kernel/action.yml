@@ -1129,7 +1129,13 @@ runs:
             fi
           fi
 
-          if ! grep -qF 'susfs_is_sdcard_android_data_not_decrypted' "$ns_file"; then
+          # NOTE: guard on the *definition* (#define CL_COPY_MNT_NS), not on the
+          # bare symbol. When the SUSFS patch applies partially (hunk #1 rejects
+          # but the call-site hunks apply), susfs_is_sdcard_android_data_not_decrypted
+          # is already present as a *usage*, which would wrongly skip inserting the
+          # extern declarations + CL_COPY_MNT_NS define and leave the file
+          # referencing undeclared symbols.
+          if ! grep -qF '#define CL_COPY_MNT_NS' "$ns_file"; then
             if grep -qF '/* Maximum number of mounts in a mount namespace */' "$ns_file"; then
               sed -i '/\/\* Maximum number of mounts in a mount namespace \*\//i\
         #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\
@@ -1148,11 +1154,14 @@ runs:
 
           echo "Manual namespace hunk repair completed"
 
+          # Verify the *declarations* are present (not just symbol usages), so an
+          # incomplete repair hard-fails here instead of being marked "recovered"
+          # and then dying at compile with undeclared-identifier errors.
           grep -nF '#include <linux/susfs_def.h>' "$ns_file" || return 1
           grep -nF '#include <trace/hooks/fs.h>' "$ns_file" || return 1
-          grep -nF 'susfs_is_current_ksu_domain' "$ns_file" || return 1
-          grep -nF 'susfs_is_sdcard_android_data_not_decrypted' "$ns_file" || return 1
-          grep -nF 'CL_COPY_MNT_NS' "$ns_file" || return 1
+          grep -nF 'extern bool susfs_is_current_ksu_domain' "$ns_file" || return 1
+          grep -nF 'extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted' "$ns_file" || return 1
+          grep -nF '#define CL_COPY_MNT_NS' "$ns_file" || return 1
 
           return 0
         }
