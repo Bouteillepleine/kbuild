@@ -880,8 +880,10 @@ runs:
         
         retry_clone "https://github.com/WildKernels/kernel_patches.git" "main" "1"
 
+        # Bouteillepleine/kernel_patches provides both ADIOS and NoMount patches
+        retry_clone "https://github.com/Bouteillepleine/kernel_patches.git" "main" "1" "bouton_kernel_patches"
+        echo "BOUTON_PATCHES_FOLDER=$GITHUB_WORKSPACE/bouton_kernel_patches/experimental" >> "$GITHUB_ENV"
         if [ "${{ inputs.enable_adios }}" = "true" ]; then
-          retry_clone "https://github.com/Bouteillepleine/kernel_patches.git" "main" "1" "bouton_kernel_patches"
           echo "ADIOS_PATCHES_FOLDER=$GITHUB_WORKSPACE/bouton_kernel_patches/experimental" >> "$GITHUB_ENV"
         fi
         
@@ -1471,6 +1473,36 @@ runs:
 
         echo "::endgroup::"
     
+    - name: Apply NoMount Patch
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::group::Apply NoMount (VFS metamodule) patch"
+        cd "$COMMON_KERNEL_FOLDER"
+        if [ "${{ env.OP_SUSFS }}" = "true" ]; then
+          NM_PATCH="$GITHUB_WORKSPACE/bouton_kernel_patches/experimental/nomount/susfs/nomount-${ANDROID_VER}-${KERNEL_VER}.patch"
+          echo "SUSFS build -> using SUSFS-compatible NoMount variant"
+        else
+          NM_PATCH="$GITHUB_WORKSPACE/bouton_kernel_patches/experimental/nomount/nomount-${ANDROID_VER}-${KERNEL_VER}.patch"
+          echo "non-SUSFS build -> using raw-GKI NoMount variant"
+        fi
+        if [ ! -f "$NM_PATCH" ]; then
+          echo "::warning::NoMount patch not found for ${ANDROID_VER}-${KERNEL_VER} ($NM_PATCH); skipping"
+        else
+          echo "Applying NoMount patch: $NM_PATCH"
+          if patch -p1 --forward -F 3 --verbose < "$NM_PATCH"; then
+            DEFCONFIG="$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig"
+            sed -i '/^CONFIG_NOMOUNT=/d' "$DEFCONFIG"
+            echo "CONFIG_NOMOUNT=y" >> "$DEFCONFIG"
+            echo "✅ NoMount applied + CONFIG_NOMOUNT=y"
+          else
+            echo "::error::NoMount patch failed to apply"
+            find . -name '*.rej' -exec sh -c 'echo "--- $1 ---"; cat "$1"' _ {} \;
+            exit 1
+          fi
+        fi
+        echo "::endgroup::"
+
     - name: Add BBG
       if: ${{ env.OP_BBG == 'true' }}
       shell: bash
