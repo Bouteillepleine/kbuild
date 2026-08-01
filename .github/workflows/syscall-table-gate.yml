@@ -1,0 +1,127 @@
+name: NoMount — syscall-table regression gate
+
+# Guards the hookless invariant: NoMount adds NO syscall (it hijacks per-inode
+# op vtables, never sys_call_table). Three layers:
+#   1. source-gate   — always-on, fast: fail if any commit adds a syscall to
+#                      NoMount source/patches (SYSCALL_DEFINE / sys_call_table /
+#                      __NR_). This is the enforcing regression gate.
+#   2. scanner-build — build the freestanding on-device syscall scanner
+#                      (aarch64 + arm) as artifacts for the runtime/device audit.
+#   3. vmlinux-audit — on-demand: audit a real vmlinux (from the debug builder)
+#                      for injected custom syscall wrappers.
+
+on:
+  push:
+    branches: [hookless, feature/syscall-table-gate]
+    paths:
+      - 'hookless/src/**'
+      - 'hookless/patches/**'
+      - 'hookless/tools/**'
+      - '.github/workflows/syscall-table-gate.yml'
+  workflow_dispatch:
+    inputs:
+      vmlinux_url:
+        description: 'vmlinux audit: direct URL to a vmlinux (from the debug builder). Empty = skip.'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: syscall-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  source-gate:
+    name: source-gate (no added syscall)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert NoMount adds no syscall
+        run: |
+          set -e
+          pat='SYSCALL_DEFINE|COMPAT_SYSCALL_DEFINE|sys_call_table|__NR_[a-z]'
+          fail=0
+
+          echo "== hookless/src (all lines) =="
+          if grep -rnE "$pat" hookless/src/ ; then
+            echo "::error::NoMount source introduces a syscall construct — breaks the hookless zero-syscall invariant."
+            fail=1
+          else
+            echo "clean: no syscall construct in src/"
+          fi
+
+          echo "== hookless/patches (added lines only) =="
+          # added lines only: '^+' but NOT the '+++' diff header (PCRE lookahead)
+          if grep -rHnP '^\+(?!\+\+).*('"$pat"')' hookless/patches/ ; then
+            echo "::error::A NoMount patch ADDS a syscall construct — breaks the hookless zero-syscall invariant."
+            fail=1
+          else
+            echo "clean: no patch adds a syscall construct"
+          fi
+
+          [ "$fail" = 0 ] && echo "PASS: NoMount adds zero syscalls." || { echo "FAIL"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  scanner-build:
+    name: scanner-build (aarch64 + arm)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: master
+      - name: Build freestanding scanner + super-strip
+        run: |
+          set -e
+          cd hookless/tools/syscall_scan
+          cc -O2 -o sstrip sstrip.c
+          CFLAGS="-static -nostdlib -ffreestanding -fno-unwind-tables \
+            -fno-asynchronous-unwind-tables -Oz -flto \
+            -Wl,--entry=__start -Wl,--gc-sections -Wl,--build-id=none -s"
+          # scan (range scanner) uses hardware division -> aarch64 only.
+          # sctest (single probe, division-free) builds for both, like upstream.
+          zig cc -target aarch64-linux $CFLAGS -o scan-arm64   syscall_scan.c
+          zig cc -target aarch64-linux $CFLAGS -o sctest-arm64 syscall_test.c
+          zig cc -target arm-linux     $CFLAGS -o sctest-arm   syscall_test.c
+          ./sstrip scan-arm64 sctest-arm64 sctest-arm
+          echo "== sizes =="; ls -l scan-* sctest-* | awk '{print $5"\t"$NF}'
+          file scan-* sctest-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syscall-scanner
+          path: |
+            hookless/tools/syscall_scan/scan-*
+            hookless/tools/syscall_scan/sctest-*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  vmlinux-audit:
+    name: vmlinux-audit (custom-syscall check)
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.vmlinux_url != ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch vmlinux
+        run: |
+          set -e
+          curl -fL --retry 3 -o vmlinux "${{ github.event.inputs.vmlinux_url }}"
+          # accept a gzip'd vmlinux too
+          if file vmlinux | grep -qi gzip; then mv vmlinux vmlinux.gz && gunzip vmlinux.gz; fi
+          file vmlinux
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends binutils llvm
+      - name: Audit syscall table
+        run: |
+          bash hookless/tools/syscall_table_dump.sh vmlinux \
+            --fail-on-custom --out present.map | tee audit.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vmlinux-syscall-audit
+          path: |
+            audit.log
+            present.map
+          if-no-files-found: ignore
