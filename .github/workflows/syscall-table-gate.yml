@@ -78,14 +78,18 @@ jobs:
           set -e
           cd hookless/tools/syscall_scan
           cc -O2 -o sstrip sstrip.c
-          CFLAGS="-static -nostdlib -ffreestanding -fno-unwind-tables \
-            -fno-asynchronous-unwind-tables -Oz -flto \
-            -Wl,--entry=__start -Wl,--gc-sections -Wl,--build-id=none -s"
+          # Match upstream: let Zig link its bundled musl statically (so libc
+          # headers like errno.h resolve) but override the entry to __start and
+          # gc + sstrip everything else away. NOT -nostdlib/-ffreestanding —
+          # those drop the sysroot headers under zig cc.
+          CFLAGS="-s -Oz -std=c23 -static -fno-unwind-tables -flto \
+            -fmerge-all-constants -Wno-int-conversion -Wno-unknown-attributes \
+            -Wl,--entry=__start -Wl,--gc-sections,-z,norelro -Wl,--build-id=none"
           # scan (range scanner) uses hardware division -> aarch64 only.
           # sctest (single probe, division-free) builds for both, like upstream.
-          zig cc -target aarch64-linux $CFLAGS -o scan-arm64   syscall_scan.c
-          zig cc -target aarch64-linux $CFLAGS -o sctest-arm64 syscall_test.c
-          zig cc -target arm-linux     $CFLAGS -o sctest-arm   syscall_test.c
+          zig cc -target aarch64-linux $CFLAGS syscall_scan.c -o scan-arm64
+          zig cc -target aarch64-linux $CFLAGS syscall_test.c -o sctest-arm64
+          zig cc -target arm-linux     $CFLAGS syscall_test.c -o sctest-arm
           ./sstrip scan-arm64 sctest-arm64 sctest-arm
           echo "== sizes =="; ls -l scan-* sctest-* | awk '{print $5"\t"$NF}'
           file scan-* sctest-*
