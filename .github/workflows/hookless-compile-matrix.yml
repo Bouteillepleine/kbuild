@@ -6,7 +6,9 @@ name: NoMount hookless — compile-test matrix
 
 on:
   push:
-    branches: [hookless]
+    # TEMP: sync/upstream-2026-08-08 added to run the matrix on the upstream-sync
+    # reconcile — revert to [hookless] once merged.
+    branches: [hookless, sync/upstream-2026-08-08]
     # Only rebuild when the patch/source or this workflow changes — NOT for docs
     # (e.g. hookless/AUDIT.md), so documentation edits don't re-run all ten.
     paths:
