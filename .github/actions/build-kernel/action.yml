@@ -2042,6 +2042,7 @@ runs:
         set -euo pipefail
         echo "::group::Build Nethunter Wi-Fi injection modules"
         OUT="$COMMON_KERNEL_FOLDER/out"
+        MODZIP_DIR="$GITHUB_WORKSPACE/kernel_modules"; mkdir -p "$MODZIP_DIR"
         export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
         export LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
         export CC=clang HOSTCC=clang
@@ -2049,7 +2050,7 @@ runs:
         # NOT in the common kernel (bootloops OP15); its DEVICE CRCs come via EXTRA_SYMVERS.
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
              -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
-        KERNEL_SRC="$OUT" OUT_DIR="$AK3_FOLDER/modules" \
+        KERNEL_SRC="$OUT" OUT_DIR="$MODZIP_DIR" \
         KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
         EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device.symvers" \
         DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
@@ -2070,7 +2071,7 @@ runs:
             for ko in $(find "$CK/$1" -name '*.ko' 2>/dev/null); do
               llvm-strip --strip-debug "$ko" 2>/dev/null || true
               [ -f "$SIGK" ] && "$CK/scripts/sign-file" "$SIGH" "$SIGK" "${SIGK%.pem}.x509" "$ko" 2>/dev/null || true
-              cp "$ko" "$AK3_FOLDER/modules/" && echo "   $2: $(basename "$ko")"
+              cp "$ko" "$MODZIP_DIR/" && echo "   $2: $(basename "$ko")"
             done
           else echo "::warning::$2 modules build failed (non-fatal)"; fi
         }
@@ -2109,6 +2110,14 @@ runs:
         else
           echo "::warning::Module.symvers not found at $SV"
         fi
+
+    - name: Upload kernel modules zip
+      if: ${{ env.MODULES_ZIP != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel_modules_${{ env.OP_MODEL }}_${{ env.OP_OS_VERSION }}
+        path: ${{ env.MODULES_ZIP }}
+        if-no-files-found: warn
 
     - name: Upload Module.symvers
       if: ${{ env.SYMVERS_PATH != '' }}
