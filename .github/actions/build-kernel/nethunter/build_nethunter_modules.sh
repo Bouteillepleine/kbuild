@@ -12,6 +12,10 @@ set -euo pipefail
 : "${CROSS_COMPILE:=aarch64-linux-gnu-}"
 : "${KMAKE:=}"                                   # match the kernel job, e.g. "LLVM=1 LLVM_IAS=1"
 : "${STRIP:=${CROSS_COMPILE}strip}"             # llvm-strip when building with LLVM=1
+# Module.symvers of on-device modules the drivers link against (cfg80211). This
+# supplies the DEVICE's real CRCs so the .ko loads on the running kernel WITHOUT
+# adding cfg80211 to the common kernel (which bootloops OP15).
+: "${EXTRA_SYMVERS:=}"
 # driver list: "clone_url@git_sha". Pin SHAs — never a moving branch.
 : "${DRIVERS:?space-separated list of url@sha}"
 
@@ -44,13 +48,17 @@ for spec in $DRIVERS; do
     -e 's/-Wno-restrict//g' \
     -e 's/-Wno-maybe-uninitialized//g' {} +
 
-  make -j"$(nproc)" -C "$src" \
+  # Non-fatal per driver: one bad driver must not sink the whole build.
+  if ! make -j"$(nproc)" -C "$src" \
        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
        KCFLAGS="-Wno-unknown-warning-option -Wno-error" \
-       KSRC="$KERNEL_SRC" KVER="$kver" modules
+       KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMVERS" \
+       KSRC="$KERNEL_SRC" KVER="$kver" modules; then
+    echo "!! $name failed to build — skipping (non-fatal)" >&2; continue
+  fi
 
   ko="$(find "$src" -maxdepth 1 -name '*.ko' | head -1)"
-  [ -n "$ko" ] || { echo "!! no .ko produced for $name" >&2; exit 1; }
+  [ -n "$ko" ] || { echo "!! no .ko produced for $name — skipping" >&2; continue; }
 
   # ORDER MATTERS: strip first, then sign (signature is appended last).
   "$STRIP" --strip-debug "$ko"

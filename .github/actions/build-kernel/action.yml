@@ -2083,13 +2083,16 @@ runs:
         export LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm \
                OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
         export CC=clang HOSTCC=clang
-        # Release builds compile only Image; build the module set so cfg80211.ko
-        # (and friends) exist and their exports land in $OUT/Module.symvers.
+        # Build the module set so vmlinux/module exports populate $OUT/Module.symvers.
+        # cfg80211 is NOT built here (adding it to the common kernel bootloops OP15);
+        # its DEVICE CRCs are supplied out-of-band via EXTRA_SYMVERS (cfg80211.symvers
+        # extracted from the device's vendor_dlkm cfg80211.ko).
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
              -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
         KERNEL_SRC="$OUT" \
         OUT_DIR="$AK3_FOLDER/modules" \
         KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
+        EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device_wifi.symvers" \
         DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
         bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
         echo "::endgroup::"
