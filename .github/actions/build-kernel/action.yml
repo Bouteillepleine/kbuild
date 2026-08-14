@@ -2063,8 +2063,9 @@ runs:
         SIGH=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$OUT/.config"); SIGH=${SIGH:-sha256}
         SIGK="$COMMON_KERNEL_FOLDER/$(sed -n 's/^CONFIG_MODULE_SIG_KEY="\(.*\)"/\1/p' "$OUT/.config")"
         "$COMMON_KERNEL_FOLDER/scripts/config" --file "$OUT/.config" \
-          --enable WLAN_VENDOR_ATH --module CFG80211 --module MAC80211 --module ATH_COMMON \
-          --module ATH9K_HW --module ATH9K_COMMON --module ATH9K --module ATH9K_HTC || true
+          --enable NETDEVICES --enable WLAN --module CFG80211 --enable CFG80211_WEXT \
+          --module MAC80211 --enable WLAN_VENDOR_ATH --module ATH9K_HW --module ATH9K_COMMON \
+          --module ATH9K_HTC
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
           -C "$COMMON_KERNEL_FOLDER" O="$OUT" olddefconfig
         if make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
