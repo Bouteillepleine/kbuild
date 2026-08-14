@@ -2069,8 +2069,8 @@ runs:
           -C "$COMMON_KERNEL_FOLDER" O="$OUT" olddefconfig
         if make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
              -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" \
-             M=drivers/net/wireless/ath modules KBUILD_EXTRA_SYMBOLS="$SV"; then
-          for ko in $(find "$OUT/drivers/net/wireless/ath" -name '*.ko' 2>/dev/null); do
+             M="$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath" modules KBUILD_EXTRA_SYMBOLS="$SV"; then
+          for ko in $(find "$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath" "$OUT/drivers/net/wireless/ath" -name '*.ko' 2>/dev/null); do
             llvm-strip --strip-debug "$ko" 2>/dev/null || true
             [ -f "$SIGK" ] && "$COMMON_KERNEL_FOLDER/scripts/sign-file" "$SIGH" "$SIGK" "${SIGK%.pem}.x509" "$ko" 2>/dev/null || true
             cp "$ko" "$AK3_FOLDER/modules/" && echo "   ath: $(basename "$ko")"
