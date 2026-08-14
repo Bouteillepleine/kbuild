@@ -22,12 +22,10 @@ CONFIG_USB_SERIAL_FTDI_SIO=y
 CONFIG_USB_SERIAL_PL2303=y
 CONFIG_USB_SERIAL_CP210X=y
 
-# --- 802.11 stack for out-of-tree injection drivers (built as ext modules) ---
-CONFIG_CFG80211=m
-CONFIG_CFG80211_WEXT=y
-CONFIG_MAC80211=m
-CONFIG_RFKILL=y
-CONFIG_MAC80211_HWSIM=m
+# NOTE: cfg80211/mac80211/rfkill are intentionally NOT set here. OP15's internal
+# WLAN already provides them; forcing their state (esp. RFKILL=y, which reassigns
+# the base value) bootloops the device. The out-of-tree injection drivers link
+# against the base cfg80211 regardless.
 
 # --- netfilter extras for MITM / packet manipulation ---
 CONFIG_NETFILTER_NETLINK_QUEUE=m
