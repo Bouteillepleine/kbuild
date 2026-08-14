@@ -2098,7 +2098,15 @@ runs:
         # USB CAN (automotive)
         "$CK/scripts/config" --file "$OUT/.config" --enable NETDEVICES --module CAN --module CAN_DEV \
           --module CAN_GS_USB --module CAN_KVASER_USB --module CAN_PEAK_USB --module CAN_EMS_USB --module CAN_8DEV_USB
-        MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/can can        echo "::endgroup::"
+        MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/can can
+        # package all drivers as a SEPARATE zip (AK3 stays Image-only)
+        if [ -n "$(ls -A "$MODZIP_DIR" 2>/dev/null)" ]; then
+          MZ="$GITHUB_WORKSPACE/kernel_modules_${OP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}.zip"
+          ( cd "$MODZIP_DIR" && zip -rq "$MZ" . )
+          echo "MODULES_ZIP=$MZ" >> "$GITHUB_ENV"
+          echo "kernel_modules: $(ls "$MODZIP_DIR" | wc -l) files -> $(basename "$MZ")"
+        fi
+        echo "::endgroup::"
 
     - name: Export Module.symvers (kernel ABI, normal run)
       shell: bash
