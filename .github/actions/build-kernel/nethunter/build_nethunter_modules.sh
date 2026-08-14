@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# External-module build step for Nethunter Wi-Fi injection drivers.
+# Runs AFTER the kernel build, against its O= out dir, so vermagic +
+# modversion CRCs + signature match the flashed kernel by construction.
+# Config-agnostic: inherits the kernel's own .config / toolchain / signing key.
+set -euo pipefail
+
+# --- inputs (export before calling) -----------------------------------------
+: "${KERNEL_SRC:?KBUILD dir with .config + Module.symvers (the O= out dir)}"
+: "${OUT_DIR:=$PWD/nethunter_modules}"          # where signed .ko land
+: "${ARCH:=arm64}"
+: "${CROSS_COMPILE:=aarch64-linux-gnu-}"
+: "${KMAKE:=}"                                   # match the kernel job, e.g. "LLVM=1 LLVM_IAS=1"
+: "${STRIP:=${CROSS_COMPILE}strip}"             # llvm-strip when building with LLVM=1
+# driver list: "clone_url@git_sha". Pin SHAs — never a moving branch.
+: "${DRIVERS:?space-separated list of url@sha}"
+
+mkdir -p "$OUT_DIR"
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+
+# --- resolve signing params from the KERNEL's config (not hardcoded) --------
+cfg="$KERNEL_SRC/.config"
+sig_hash="$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$cfg")"; sig_hash="${sig_hash:-sha256}"
+sig_key="$KERNEL_SRC/$(sed -n 's/^CONFIG_MODULE_SIG_KEY="\(.*\)"/\1/p' "$cfg")"
+sig_crt="${sig_key%.pem}.x509"
+kver="$(cat "$KERNEL_SRC/include/config/kernel.release")"
+echo ":: target kernelrelease=$kver  sig_hash=$sig_hash"
+
+manifest="$OUT_DIR/manifest.txt"; : > "$manifest"
+
+for spec in $DRIVERS; do
+  url="${spec%@*}"; sha="${spec##*@}"; name="$(basename "$url" .git)"
+  src="$WORK/$name"
+  echo "==> $name @ $sha"
+  git clone --quiet "$url" "$src"
+  ( cd "$src" && [ "$sha" != HEAD ] && git checkout --quiet "$sha" || true )
+
+  make -j"$(nproc)" -C "$src" \
+       ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
+       KSRC="$KERNEL_SRC" KVER="$kver" modules
+
+  ko="$(find "$src" -maxdepth 1 -name '*.ko' | head -1)"
+  [ -n "$ko" ] || { echo "!! no .ko produced for $name" >&2; exit 1; }
+
+  # ORDER MATTERS: strip first, then sign (signature is appended last).
+  "$STRIP" --strip-debug "$ko"
+  if [ -x "$KERNEL_SRC/scripts/sign-file" ] && [ -f "$sig_key" ]; then
+    "$KERNEL_SRC/scripts/sign-file" "$sig_hash" "$sig_key" "$sig_crt" "$ko"
+    echo "   signed with $sig_hash"
+  else
+    echo "   ⚠️ signing key/tool absent — shipping unsigned (loads with taint if MODULE_SIG_FORCE off)"
+  fi
+
+  cp "$ko" "$OUT_DIR/"
+  b="$(basename "$ko")"
+  printf '%s\t%s\t%s\n' "$b" "$sha" "$(sha256sum "$OUT_DIR/$b" | cut -d" " -f1)" >> "$manifest"
+  echo "   -> $OUT_DIR/$b"
+done
+
+echo ":: done. modules in $OUT_DIR"; cat "$manifest"

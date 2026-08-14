@@ -1516,6 +1516,17 @@ runs:
         CONFIG_RUST=y
         EOF
 
+    - name: Add Nethunter configs (EmberHeart)
+      shell: bash
+      if: ${{ env.OP_NETHUNTER == 'true' }}
+      run: |
+        set -euo pipefail
+        echo "::group::Apply Nethunter defconfig fragment"
+        cat "${{ github.action_path }}/nethunter/nethunter.gki.fragment" \
+          >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig"
+        echo "Nethunter configs applied ✅ (olddefconfig will prune unsupported symbols)"
+        echo "::endgroup::"
+
     - name: Save Build Metadata
       id: save_metadata
       shell: bash
@@ -2057,6 +2068,30 @@ runs:
         echo "   - Image size: $(numfmt --to=iec-i --suffix=B "$IMG_SIZE")"
         echo "   - SHA256: $IMG_SHA256"
         echo "   - Build time: ${BUILD_TIME}s"
+        echo "::endgroup::"
+
+    - name: Build Nethunter injection modules (EmberHeart)
+      shell: bash
+      if: ${{ env.OP_NETHUNTER == 'true' }}
+      run: |
+        set -euo pipefail
+        echo "::group::Build Nethunter Wi-Fi injection modules"
+        OUT="$COMMON_KERNEL_FOLDER/out"
+        # Re-establish the same LLVM toolchain env the kernel build used
+        # (those exports were shell-local to the build step); clang is on PATH.
+        export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+        export LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm \
+               OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+        export CC=clang HOSTCC=clang
+        # Release builds compile only Image; build the module set so cfg80211.ko
+        # (and friends) exist and their exports land in $OUT/Module.symvers.
+        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
+             -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
+        KERNEL_SRC="$OUT" \
+        OUT_DIR="$AK3_FOLDER/modules" \
+        KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
+        DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
+        bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
         echo "::endgroup::"
 
     - name: Create Kernel ZIP

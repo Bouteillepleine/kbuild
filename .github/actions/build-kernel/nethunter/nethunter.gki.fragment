@@ -1,0 +1,37 @@
+# EmberHeart / Nethunter kernel config fragment (GKI arm64, 6.12).
+# Appended to gki_defconfig before the build; olddefconfig prunes any
+# symbol not present on this kernel, so unknown/renamed keys are safe.
+
+# --- USB gadget: BadUSB / HID keyboard, DriveDroid mass storage, ethernet ---
+CONFIG_USB_GADGET=y
+CONFIG_USB_CONFIGFS=y
+CONFIG_USB_CONFIGFS_F_HID=y
+CONFIG_USB_CONFIGFS_MASS_STORAGE=y
+CONFIG_USB_CONFIGFS_F_FS=y
+CONFIG_USB_CONFIGFS_ACM=y
+CONFIG_USB_CONFIGFS_SERIAL=y
+CONFIG_USB_CONFIGFS_RNDIS=y
+CONFIG_USB_CONFIGFS_ECM=y
+CONFIG_USB_CONFIGFS_NCM=y
+
+# --- host-side USB for external adapters (serial, ACM, HID) ---
+CONFIG_USB_ACM=y
+CONFIG_USB_SERIAL=y
+CONFIG_USB_SERIAL_CH341=y
+CONFIG_USB_SERIAL_FTDI_SIO=y
+CONFIG_USB_SERIAL_PL2303=y
+CONFIG_USB_SERIAL_CP210X=y
+
+# --- 802.11 stack for out-of-tree injection drivers (built as ext modules) ---
+CONFIG_CFG80211=m
+CONFIG_CFG80211_WEXT=y
+CONFIG_MAC80211=m
+CONFIG_RFKILL=y
+CONFIG_MAC80211_HWSIM=m
+
+# --- netfilter extras for MITM / packet manipulation ---
+CONFIG_NETFILTER_NETLINK_QUEUE=m
+CONFIG_NETFILTER_XT_TARGET_TPROXY=m
+CONFIG_NETFILTER_XT_MATCH_MAC=m
+CONFIG_NF_TABLES=m
+CONFIG_IP_NF_TARGET_REDIRECT=m
