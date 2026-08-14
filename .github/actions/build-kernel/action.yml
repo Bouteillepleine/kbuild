@@ -2054,38 +2054,48 @@ runs:
         EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device.symvers" \
         DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
         bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
-        # --- in-kernel driver: ath9k_htc (AR9271, top injection adapter) ---
-        # Built from the kernel subdir as a module, linked to the DEVICE's cfg80211/mac80211
-        # CRCs (device.symvers). Only the subdir is built (M=), so cfg80211/mac80211 are NOT
-        # compiled here — they resolve from device.symvers. Never touches the boot Image →
-        # no bootloop. Paired to this kernel (module_layout matches). Non-fatal.
+        # --- in-kernel drivers as modules, linked to the DEVICE's cfg80211/mac80211/bt/can
+        # CRCs (device.symvers). Only each subdir is built (M=), subsystems resolve from
+        # device.symvers. Never touches the boot Image (no bootloop); paired to this kernel.
         SV="${{ github.action_path }}/nethunter/device.symvers"
         SIGH=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$OUT/.config"); SIGH=${SIGH:-sha256}
         SIGK="$COMMON_KERNEL_FOLDER/$(sed -n 's/^CONFIG_MODULE_SIG_KEY="\(.*\)"/\1/p' "$OUT/.config")"
-        # ath9k force-selects MAC80211_LEDS (LEDS_CLASS=y), but the device's mac80211
-        # was built without LEDS -> drop the select so those symbols aren't referenced.
-        sed -i '/select MAC80211_LEDS/d' "$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath/ath9k/Kconfig"
-        "$COMMON_KERNEL_FOLDER/scripts/config" --file "$OUT/.config" \
-          --enable NETDEVICES --enable WLAN --module CFG80211 --enable CFG80211_WEXT \
-          --module MAC80211 --disable MAC80211_LEDS --enable WLAN_VENDOR_ATH \
-          --module ATH9K_HW --module ATH9K_COMMON --module ATH9K_HTC
-        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
-          -C "$COMMON_KERNEL_FOLDER" O="$OUT" olddefconfig
-        # regenerate include/config/auto.conf so the M= build sees the new =m symbols
-        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
-          -C "$COMMON_KERNEL_FOLDER" O="$OUT" prepare
-        if make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
-             -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" \
-             M="$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath" modules KBUILD_EXTRA_SYMBOLS="$SV"; then
-          for ko in $(find "$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath" "$OUT/drivers/net/wireless/ath" -name '*.ko' 2>/dev/null); do
-            llvm-strip --strip-debug "$ko" 2>/dev/null || true
-            [ -f "$SIGK" ] && "$COMMON_KERNEL_FOLDER/scripts/sign-file" "$SIGH" "$SIGK" "${SIGK%.pem}.x509" "$ko" 2>/dev/null || true
-            cp "$ko" "$AK3_FOLDER/modules/" && echo "   ath: $(basename "$ko")"
-          done
-        else
-          echo "::warning::ath9k_htc build failed — skipping (non-fatal)"
-        fi
-        echo "::endgroup::"
+        CK="$COMMON_KERNEL_FOLDER"
+        MK() { make LD="$CK/ld-wrapper" HOSTLD="$CK/ld-wrapper" -C "$CK" O="$OUT" "$@"; }
+        # device mac80211 lacks MAC80211_LEDS exports -> drop the select across wireless
+        for kc in $(grep -rl 'select MAC80211_LEDS' "$CK/drivers/net/wireless" 2>/dev/null); do sed -i '/select MAC80211_LEDS/d' "$kc"; done
+        build_sub() { # $1=subdir  $2=label
+          MK prepare >/dev/null 2>&1 || true
+          if MK -j"$(nproc --all)" M="$CK/$1" modules KBUILD_EXTRA_SYMBOLS="$SV"; then
+            for ko in $(find "$CK/$1" -name '*.ko' 2>/dev/null); do
+              llvm-strip --strip-debug "$ko" 2>/dev/null || true
+              [ -f "$SIGK" ] && "$CK/scripts/sign-file" "$SIGH" "$SIGK" "${SIGK%.pem}.x509" "$ko" 2>/dev/null || true
+              cp "$ko" "$AK3_FOLDER/modules/" && echo "   $2: $(basename "$ko")"
+            done
+          else echo "::warning::$2 modules build failed (non-fatal)"; fi
+        }
+        # ath9k_htc (AR9271)
+        "$CK/scripts/config" --file "$OUT/.config" --enable NETDEVICES --enable WLAN \
+          --module CFG80211 --enable CFG80211_WEXT --module MAC80211 --disable MAC80211_LEDS \
+          --enable WLAN_VENDOR_ATH --module ATH9K_HW --module ATH9K_COMMON --module ATH9K_HTC
+        MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/ath ath9k
+        # mt76 (MT7601U / MT7921U / MT76 USB)
+        "$CK/scripts/config" --file "$OUT/.config" --enable WLAN_VENDOR_MEDIATEK \
+          --module MT7601U --module MT76_CORE --module MT76_USB --module MT7921U --module MT7921_COMMON
+        MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/mediatek mt76
+        # rtw88 (8822bu / 8821cu / 8723du)
+        "$CK/scripts/config" --file "$OUT/.config" --enable WLAN_VENDOR_REALTEK --module RTW88 \
+          --module RTW88_CORE --module RTW88_USB --module RTW88_8822B --module RTW88_8822BU \
+          --module RTW88_8821C --module RTW88_8821CU --module RTW88_8723D --module RTW88_8723DU
+        MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/realtek/rtw88 rtw88
+        # btusb (external BT dongles)
+        "$CK/scripts/config" --file "$OUT/.config" --enable NET --module BT --module BT_HCIBTUSB \
+          --enable BT_HCIBTUSB_BCM --enable BT_HCIBTUSB_RTL --enable BT_HCIBTUSB_MTK
+        MK olddefconfig >/dev/null 2>&1; build_sub drivers/bluetooth btusb
+        # USB CAN (automotive)
+        "$CK/scripts/config" --file "$OUT/.config" --enable NETDEVICES --module CAN --module CAN_DEV \
+          --module CAN_GS_USB --module CAN_KVASER_USB --module CAN_PEAK_USB --module CAN_EMS_USB --module CAN_8DEV_USB
+        MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/can can        echo "::endgroup::"
 
     - name: Export Module.symvers (kernel ABI, normal run)
       shell: bash
