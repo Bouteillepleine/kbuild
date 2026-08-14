@@ -2035,6 +2035,48 @@ runs:
         echo "   - Build time: ${BUILD_TIME}s"
         echo "::endgroup::"
 
+    - name: Build Nethunter injection modules
+      shell: bash
+      if: ${{ env.OP_NETHUNTER == 'true' }}
+      run: |
+        set -euo pipefail
+        echo "::group::Build Nethunter Wi-Fi injection modules"
+        OUT="$COMMON_KERNEL_FOLDER/out"
+        export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
+        export LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
+        export CC=clang HOSTCC=clang
+        # Populate $OUT/Module.symvers (vmlinux CRCs incl module_layout). cfg80211 is
+        # NOT in the common kernel (bootloops OP15); its DEVICE CRCs come via EXTRA_SYMVERS.
+        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
+             -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
+        KERNEL_SRC="$OUT" OUT_DIR="$AK3_FOLDER/modules" \
+        KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
+        EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device_wifi.symvers" \
+        DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
+        bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
+        echo "::endgroup::"
+
+    - name: Export Module.symvers (kernel ABI, normal run)
+      shell: bash
+      run: |
+        set -euo pipefail
+        SV="$COMMON_KERNEL_FOLDER/out/Module.symvers"
+        if [ -f "$SV" ]; then
+          cp "$SV" "$GITHUB_WORKSPACE/Module.symvers"
+          echo "SYMVERS_PATH=$GITHUB_WORKSPACE/Module.symvers" >> "$GITHUB_ENV"
+          echo "Module.symvers: $(wc -l < "$SV") symbols"
+        else
+          echo "::warning::Module.symvers not found at $SV"
+        fi
+
+    - name: Upload Module.symvers
+      if: ${{ env.SYMVERS_PATH != '' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: Module.symvers-${{ env.OP_MODEL }}-${{ env.KERNEL_FULL_VER }}
+        path: ${{ env.SYMVERS_PATH }}
+        if-no-files-found: warn
+
     - name: Create Kernel ZIP
       id: create_zip
       shell: bash

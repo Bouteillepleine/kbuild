@@ -24,6 +24,7 @@
   "ip_set": true,
   "unicode": true,
   "ntsync": false,
+  "nethunter": true,
   "blacklist_modules": "oplus_secure_guard_new",
   "uname": "5-gb2a876903b49-ab14541642-4k"
 }
