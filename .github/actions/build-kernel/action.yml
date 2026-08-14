@@ -2046,10 +2046,11 @@ runs:
         export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
         export LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
         export CC=clang HOSTCC=clang
-        # Populate $OUT/Module.symvers (vmlinux CRCs incl module_layout). cfg80211 is
-        # NOT in the common kernel (bootloops OP15); its DEVICE CRCs come via EXTRA_SYMVERS.
-        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
-             -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
+        # Do NOT run 'make modules' — it rebuilds vmlinux and shifts module_layout away
+        # from the Image we already packaged. Use the Image build's own Module.symvers so
+        # drivers match the FLASHED kernel's ABI. Back it up (config edits below must not
+        # let any step regenerate it with a different vmlinux).
+        cp "$OUT/Module.symvers" "$OUT/Module.symvers.kmi"
         KERNEL_SRC="$OUT" OUT_DIR="$MODZIP_DIR" \
         KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
         EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device.symvers" \
@@ -2066,6 +2067,7 @@ runs:
         # device mac80211 lacks MAC80211_LEDS exports -> drop the select across wireless
         for kc in $(grep -rl 'select MAC80211_LEDS' "$CK/drivers/net/wireless" 2>/dev/null); do sed -i '/select MAC80211_LEDS/d' "$kc"; done
         build_sub() { # $1=subdir  $2=label
+          cp "$OUT/Module.symvers.kmi" "$OUT/Module.symvers" 2>/dev/null || true
           MK prepare >/dev/null 2>&1 || true
           if MK -j"$(nproc --all)" M="$CK/$1" modules KBUILD_EXTRA_SYMBOLS="$SV"; then
             for ko in $(find "$CK/$1" -name '*.ko' 2>/dev/null); do
