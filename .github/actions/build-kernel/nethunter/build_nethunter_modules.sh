@@ -35,8 +35,18 @@ for spec in $DRIVERS; do
   git clone --quiet "$url" "$src"
   ( cd "$src" && [ "$sha" != HEAD ] && git checkout --quiet "$sha" || true )
 
+  # These out-of-tree Realtek Makefiles hardcode GCC-only warning flags; clang
+  # rejects them under -Werror,-Wunknown-warning-option. Strip the known ones
+  # and add a backstop so any remaining unknown warning flag can't fail the build.
+  find "$src" -name 'Makefile' -exec sed -i \
+    -e 's/-Wno-enum-int-mismatch//g' \
+    -e 's/-Wno-stringop-overread//g' \
+    -e 's/-Wno-restrict//g' \
+    -e 's/-Wno-maybe-uninitialized//g' {} +
+
   make -j"$(nproc)" -C "$src" \
        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
+       KCFLAGS="-Wno-unknown-warning-option -Wno-error" \
        KSRC="$KERNEL_SRC" KVER="$kver" modules
 
   ko="$(find "$src" -maxdepth 1 -name '*.ko' | head -1)"
