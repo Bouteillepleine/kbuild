@@ -2051,9 +2051,33 @@ runs:
              -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
         KERNEL_SRC="$OUT" OUT_DIR="$AK3_FOLDER/modules" \
         KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
-        EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device_wifi.symvers" \
+        EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device.symvers" \
         DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
         bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
+        # --- in-kernel driver: ath9k_htc (AR9271, top injection adapter) ---
+        # Built from the kernel subdir as a module, linked to the DEVICE's cfg80211/mac80211
+        # CRCs (device.symvers). Only the subdir is built (M=), so cfg80211/mac80211 are NOT
+        # compiled here — they resolve from device.symvers. Never touches the boot Image →
+        # no bootloop. Paired to this kernel (module_layout matches). Non-fatal.
+        SV="${{ github.action_path }}/nethunter/device.symvers"
+        SIGH=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$OUT/.config"); SIGH=${SIGH:-sha256}
+        SIGK="$COMMON_KERNEL_FOLDER/$(sed -n 's/^CONFIG_MODULE_SIG_KEY="\(.*\)"/\1/p' "$OUT/.config")"
+        "$COMMON_KERNEL_FOLDER/scripts/config" --file "$OUT/.config" \
+          --enable WLAN_VENDOR_ATH --module CFG80211 --module MAC80211 --module ATH_COMMON \
+          --module ATH9K_HW --module ATH9K_COMMON --module ATH9K --module ATH9K_HTC || true
+        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
+          -C "$COMMON_KERNEL_FOLDER" O="$OUT" olddefconfig
+        if make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
+             -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" \
+             M=drivers/net/wireless/ath modules KBUILD_EXTRA_SYMBOLS="$SV"; then
+          for ko in $(find "$OUT/drivers/net/wireless/ath" -name '*.ko' 2>/dev/null); do
+            llvm-strip --strip-debug "$ko" 2>/dev/null || true
+            [ -f "$SIGK" ] && "$COMMON_KERNEL_FOLDER/scripts/sign-file" "$SIGH" "$SIGK" "${SIGK%.pem}.x509" "$ko" 2>/dev/null || true
+            cp "$ko" "$AK3_FOLDER/modules/" && echo "   ath: $(basename "$ko")"
+          done
+        else
+          echo "::warning::ath9k_htc build failed — skipping (non-fatal)"
+        fi
         echo "::endgroup::"
 
     - name: Export Module.symvers (kernel ABI, normal run)
