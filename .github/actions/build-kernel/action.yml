@@ -2062,12 +2062,18 @@ runs:
         SV="${{ github.action_path }}/nethunter/device.symvers"
         SIGH=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$OUT/.config"); SIGH=${SIGH:-sha256}
         SIGK="$COMMON_KERNEL_FOLDER/$(sed -n 's/^CONFIG_MODULE_SIG_KEY="\(.*\)"/\1/p' "$OUT/.config")"
+        # ath9k force-selects MAC80211_LEDS (LEDS_CLASS=y), but the device's mac80211
+        # was built without LEDS -> drop the select so those symbols aren't referenced.
+        sed -i '/select MAC80211_LEDS/d' "$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath/ath9k/Kconfig"
         "$COMMON_KERNEL_FOLDER/scripts/config" --file "$OUT/.config" \
           --enable NETDEVICES --enable WLAN --module CFG80211 --enable CFG80211_WEXT \
-          --module MAC80211 --enable WLAN_VENDOR_ATH --module ATH9K_HW --module ATH9K_COMMON \
-          --module ATH9K_HTC
+          --module MAC80211 --disable MAC80211_LEDS --enable WLAN_VENDOR_ATH \
+          --module ATH9K_HW --module ATH9K_COMMON --module ATH9K_HTC
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
           -C "$COMMON_KERNEL_FOLDER" O="$OUT" olddefconfig
+        # regenerate include/config/auto.conf so the M= build sees the new =m symbols
+        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
+          -C "$COMMON_KERNEL_FOLDER" O="$OUT" prepare
         if make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
              -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" \
              M="$COMMON_KERNEL_FOLDER/drivers/net/wireless/ath" modules KBUILD_EXTRA_SYMBOLS="$SV"; then
