@@ -2128,8 +2128,11 @@ runs:
         MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/ath ath9k
         # mt76 (MT7601U / MT7921U / MT76x2U / MT76 USB)
         "$CK/scripts/config" --file "$OUT/.config" --enable WLAN_VENDOR_MEDIATEK \
-          --module MT7601U --module MT76_CORE --module MT76_USB --module MT7921U --module MT7921_COMMON \
-          --module MT76x2U --module MT76x2_COMMON
+          --module MT7601U --module MT76_CORE --module MT76_USB --module MT7921U --module MT7921_COMMON
+        # MT76x2U & friends carry a lowercase 'x'; scripts/config uppercases the symbol
+        # (writes CONFIG_MT76X2U, which does not exist), so set the exact-case symbols
+        # directly. Deps (MAC80211/USB) are already satisfied by the ath9k step above.
+        printf 'CONFIG_MT76x02_LIB=m\nCONFIG_MT76x02_USB=m\nCONFIG_MT76x2_COMMON=m\nCONFIG_MT76x2U=m\n' >> "$OUT/.config"
         MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/mediatek mt76
         # rt2x00 (Ralink RT2800USB: RT3070/RT3572/RT5370/RT5572 injection dongles)
         "$CK/scripts/config" --file "$OUT/.config" --enable WLAN_VENDOR_RALINK \
