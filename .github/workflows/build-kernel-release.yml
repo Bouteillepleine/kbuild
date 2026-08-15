@@ -71,9 +71,14 @@ on:
         type: boolean
         default: false
       build_timestamp:
-        description: 'Custom kernel build timestamp for uname -a (e.g. "Tue Feb 10 10:01:02 UTC 2026"). Leave empty for current time.'
+        description: 'Custom kernel build timestamp for uname -a (e.g. "Fri Dec 5 02:05:55 UTC 2025"). Leave empty for current time.'
         type: string
         default: ''
+      nomount_ref:
+        description: 'kbuild branch/ref for the hookless NoMount src + patches (default hookless; set e.g. test/sprivate to validate a branch before merge)'
+        required: false
+        type: string
+        default: hookless
 
 jobs:
   set-op-model:
@@ -479,20 +484,17 @@ jobs:
           echo "[DEBUG] Ccache version : $(ccache --version | head -1)"
           echo "::endgroup::"
 
-      - name: ♻️ Configure ccache & LTO cache (bounded)
+      - name: ♻️ Configure ccache (bounded)
         run: |
           echo "::group::Configure ccache environment"
           set -euo pipefail
           if command -v ccache >/dev/null 2>&1; then
             CACHE_DIR="${{ github.workspace }}/.ccache"
-            LDCACHE_DIR="${{ github.workspace }}/.ld_cache"
             CCACHE_LOG="${{ github.workspace }}/ccache.log"
             mkdir -p "$CACHE_DIR"
-            mkdir -p "$LDCACHE_DIR"
             
             SETTINGS=(
               "CCACHE_DIR=$CACHE_DIR"
-              "LDCACHE_DIR=$LDCACHE_DIR"
               "CCACHE_MAXSIZE=12G"
               "CCACHE_COMPILERCHECK=content"
               "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
@@ -549,6 +551,7 @@ jobs:
           enable_adios: ${{ inputs.enable_adios }}
           clean: ${{ inputs.clean_build }}
           debug: ${{ inputs.debug }}
+          nomount_ref: ${{ inputs.nomount_ref }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📊 Build statistics
@@ -893,15 +896,40 @@ jobs:
           
           
           
+          # NoMount Suite module (Step-2 callout): version from suite module.prop
+          MOD_VER=$(curl -fsSL https://raw.githubusercontent.com/Bouteillepleine/nomount/suite/module/module.prop 2>/dev/null | awk -F= '/^version=/{print $2}')
+          MOD_VER="${MOD_VER:-v1.0.5}"
+          MOD_ASSET="00_NoMount-Module-${MOD_VER}.zip"
+
           cat << EOF > release_notes.md
           # ReSukiSU 📦 NoMount (v$NOMOUNT_VERSION)
           
-          > **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')  
-          > **Build ID:** \`${{ github.run_id }}\`  
-          > **Workflow:** [\`${{ github.workflow }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          
+          **A custom OnePlus kernel + a mountless hiding add-on.** Two downloads: flash the kernel, then add the module on top.
+
           ---
-          
+
+          ## 🧩 This release is **two** things
+
+          | | Download | Where it's from | How to install |
+          |---|---|---|---|
+          | 1️⃣ **Kernel** | \`AK3_<device>_…zip\` (pick yours below) | built by this repo's CI | Kernel Flasher / ReSukiSU Manager |
+          | 2️⃣ **NoMount Suite** | \`$MOD_ASSET\` | the separate [NoMount project](https://github.com/maxsteeel/nomount) | ReSukiSU Manager → Modules → Install from storage |
+
+          > The kernel has NoMount **compiled in but dormant** — the **NoMount Suite module activates it**. You need both.
+
+          ## 🔴 REQUIRED — Step 2: install NoMount Suite
+
+          After flashing the kernel and rebooting:
+
+          ### ➡️ [⬇️ Download NoMount Suite: \`$MOD_ASSET\`](${{ github.server_url }}/${{ github.repository }}/releases/download/${NEW_TAG}/$MOD_ASSET)
+
+          Then: ReSukiSU Manager → **Modules → Install from storage** → select \`$MOD_ASSET\` → **reboot**.
+
+          > _It's also pinned to the top of the Assets list below — the link above just skips past all the kernel ZIPs._
+          > _One metamodule at a time: remove any existing metamodule and reboot before installing this one._
+
+          ---
+
           ## 📦 Built Devices (${#device_info[@]} total)
 
           **Feature key:** 🐦 HMBIRD · 🫥 NoMount · 🚀 BBR · 🛡️ BBG · 🌐 TTL · 🧱 IP_SET & IPv6 NAT · 🔧 Unicode Fix · 💻 Droidspaces · 🔃 NTSync
@@ -1073,7 +1101,7 @@ jobs:
             → [GitHub Release](https://github.com/ReSukiSU/ReSukiSU/releases)
           EOF
           cat << EOF >> release_notes.md
-          ### Recomended Flasher
+          ### Recommended Flasher
           - **Kernel Flasher** (Required for flashing AnyKernel3 zips and backups and OTA)  
             → [GitHub Release](https://github.com/fatalcoder524/KernelFlasher/releases)
           
@@ -1084,7 +1112,7 @@ jobs:
           ### Prerequisites
           - Unlocked bootloader.
           - Backup your current boot image.
-          - Have root access using Magisk / KernelSU / Apatch (Any forks).
+          - Have root access using Magisk / KernelSU / APatch (any fork).
           
           ### Via Kernel Flasher
           1. Download the correct AnyKernel3 ZIP for your device.
@@ -1110,6 +1138,11 @@ jobs:
           
           EOF
           
+          cat << EOF >> release_notes.md
+
+          ---
+          <sub>Build: $(date -u '+%Y-%m-%d %H:%M UTC') · run \`${{ github.run_id }}\` · [workflow log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})</sub>
+          EOF
           echo "--- Final Release Notes ---"
           cat release_notes.md
 

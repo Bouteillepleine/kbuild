@@ -17,7 +17,7 @@ inputs:
     type: string
     default: ""
   build_timestamp:
-    description: 'Custom kernel build timestamp shown in uname -a (e.g. "Tue Feb 10 10:01:02 UTC 2026"). Leave empty to use the current build time.'
+    description: 'Custom kernel build timestamp shown in uname -a (e.g. "Fri Dec 5 02:05:55 UTC 2025"). Leave empty to use the current build time.'
     required: false
     type: string
     default: ''
@@ -41,6 +41,11 @@ inputs:
     required: false
     type: boolean
     default: false
+  nomount_ref:
+    description: 'kbuild branch/ref to source the hookless NoMount src + patches from (default hookless; set a test branch to validate before merge)'
+    required: false
+    type: string
+    default: hookless
   github_token:
     description: 'GitHub Token'
     required: true
@@ -444,8 +449,8 @@ runs:
         set -euo pipefail
         echo "::group::Set build user/host"
                 
-        BUILD_USER="OnePlus"
-        BUILD_HOST="ubuntu-build"
+        BUILD_USER="kleaf"
+        BUILD_HOST="build-host"
         
         echo "BUILD_USER=$BUILD_USER" >> "$GITHUB_ENV"
         echo "BUILD_HOST=$BUILD_HOST" >> "$GITHUB_ENV"
@@ -690,19 +695,6 @@ runs:
           ${{ inputs.ksu_type }}-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
           ${{ inputs.ksu_type }}-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
 
-    - name: Restore LTO LD cache
-      id: restore-lto-ld-cache
-      uses: ./action-source/.github/actions/cache/restore
-      if: ${{ (inputs.clean == false && env.OP_LTO != 'none') || (inputs.clean == 'false' && env.OP_LTO != 'none') }}
-      with:
-        cache_path: ${{ env.LDCACHE_DIR }}
-        cache_key: ${{ inputs.ksu_type }}-v3-LTO-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
-        cache_bucket: "lto-cache"
-        debug: ${{ inputs.debug }}
-        restore_keys: |
-          ${{ inputs.ksu_type }}-v3-LTO-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-
-          ${{ inputs.ksu_type }}-v3-LTO-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-
-
     - name: Check and Prepare Caches
       shell: bash
       run: |
@@ -729,15 +721,6 @@ runs:
         
         ccache -z
         
-        # Setup and check LTO Cache
-        if [ -d "$LDCACHE_DIR" ] && find "$LDCACHE_DIR" -type f -print -quit 2>/dev/null | grep -q .; then
-          echo "✅ Restored LTO LD cache found"
-          
-          echo "Updating LTO cache atime for cache eviction..."
-          find ${{ env.LDCACHE_DIR }} -type f -exec touch -t $(date -d "1 day ago" +%Y%m%d%H%M) {} +
-        else
-          echo "⚠️ No existing LTO cache - linker will generate new artifacts"
-        fi
         echo "::endgroup::"
 
     - name: Fetch Build Dependencies
@@ -965,16 +948,31 @@ runs:
         echo "::group::Apply NoMount (hookless VFS) patch"
         NM_SRC="$GITHUB_WORKSPACE/nomount_hookless"
         rm -rf "$NM_SRC"
-        git clone --depth 1 -b hookless https://github.com/Bouteillepleine/kbuild.git "$NM_SRC"
+        git clone --depth 1 -b "${{ inputs.nomount_ref }}" https://github.com/Bouteillepleine/kbuild.git "$NM_SRC"
         NM_PATCH="$NM_SRC/hookless/patches/nomount_${KERNEL_VER}_kernel_integration.patch"
         DEFCONFIG="$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig"
+        # Fail-closed: OP_NMS asked for a NoMount kernel, so a missing integration
+        # patch must not yield a green build with no NoMount and no CONFIG_NOMOUNT=y.
         if [ ! -f "$NM_PATCH" ]; then
-          echo "::warning::No hookless NoMount patch for KERNEL_VER=${KERNEL_VER} ($NM_PATCH); skipping"
+          echo "::error::No hookless NoMount patch for KERNEL_VER=${KERNEL_VER} ($NM_PATCH)"
+          exit 1
         else
           cd "$COMMON_KERNEL_FOLDER"
           cp -f "$NM_SRC/hookless/src/nomount.c" fs/nomount.c
           cp -f "$NM_SRC/hookless/src/nomount.h" fs/nomount.h
-          if patch -p1 --forward --fuzz=3 < "$NM_PATCH"; then
+          # fuzz=1, not 3: only the task_mmu.c hunk needs slack (its header declares
+          # 6 context lines but carries 5), and 1 is enough on every GKI 5.10-6.12
+          # tree and on the OnePlus vendor trees. Wider fuzz can silently place a
+          # hunk in the wrong function.
+          if patch -p1 --forward --fuzz=1 < "$NM_PATCH"; then
+            # patch exits 0 even when fuzz relocated a hunk, so assert each edit
+            # actually landed instead of trusting the exit code.
+            grep -q 'config NOMOUNT' fs/Kconfig \
+              || { echo "::error::NoMount: fs/Kconfig edit missing"; exit 1; }
+            grep -qF 'obj-$(CONFIG_NOMOUNT) += nomount.o' fs/Makefile \
+              || { echo "::error::NoMount: fs/Makefile edit missing"; exit 1; }
+            grep -q 'nomount_spoof_mmap_metadata' fs/proc/task_mmu.c \
+              || { echo "::error::NoMount: task_mmu.c hook missing"; exit 1; }
             mkdir -p "$(dirname "$DEFCONFIG")"; touch "$DEFCONFIG"
             sed -i '/^CONFIG_NOMOUNT=/d' "$DEFCONFIG"
             echo "CONFIG_NOMOUNT=y" >> "$DEFCONFIG"
@@ -1080,16 +1078,25 @@ runs:
         cp -f "$PH/pathhide.h" fs/pathhide.h
         dos2unix fs/pathhide.c fs/pathhide.h 2>/dev/null || true
         dos2unix "$PH"/*.patch 2>/dev/null || true
-        if [ ! -f "$PH/pathhide_${KV}_integration.patch" ]; then
-          echo "::error::no pathhide integration patch for KERNEL_VER=${KV}"; exit 1
-        fi
-        if patch -p1 --forward --dry-run < "$PH/pathhide_${KV}_integration.patch" >/dev/null 2>&1; then
-          patch -p1 --forward < "$PH/pathhide_${KV}_integration.patch"
-        elif patch -p1 --reverse --dry-run < "$PH/pathhide_${KV}_integration.patch" >/dev/null 2>&1; then
-          echo "already applied: pathhide_${KV}_integration.patch"
-        else
-          echo "::error::pathhide integration patch neither applied nor already present for ${KV}"; exit 1
-        fi
+        # Fail-closed apply, same contract as the _hook step: apply, tolerate an
+        # already-applied tree, but never continue on a patch that did neither.
+        apply_or_die() {
+          local p="$1"
+          if [ ! -f "$p" ]; then
+            echo "::error::missing pathhide patch: $(basename "$p")"; exit 1
+          fi
+          if patch -p1 --forward --dry-run < "$p" >/dev/null 2>&1; then
+            patch -p1 --forward < "$p"
+          elif patch -p1 --reverse --dry-run < "$p" >/dev/null 2>&1; then
+            echo "already applied: $(basename "$p")"
+          else
+            echo "::error::pathhide patch neither applied nor already present: $(basename "$p")"; exit 1
+          fi
+        }
+        apply_or_die "$PH/pathhide_${KV}_integration.patch"
+        # /proc/<pid>/map_files leaks the ranges of mappings hidden from maps, which is
+        # enough on its own to prove concealment. Fail-closed like the rest of the step.
+        apply_or_die "$PH/pathhide_mapfiles_${KV}_integration.patch"
         # wire pathhide.o into the fs build. Appended (not patched) because the Makefile
         # context differs across Qualcomm (Google PGO_PROFILE line) and MediaTek trees.
         grep -q 'obj-y += pathhide.o' fs/Makefile || echo 'obj-y += pathhide.o' >> fs/Makefile
@@ -1744,7 +1751,7 @@ runs:
         set -u
         
         echo '#!/bin/bash' > "$COMMON_KERNEL_FOLDER/ld-wrapper"
-        echo 'ld.lld "$@" --thinlto-cache-dir=$LDCACHE_DIR --thinlto-jobs=$(nproc --all)' >> "$COMMON_KERNEL_FOLDER/ld-wrapper"
+        echo 'ld.lld "$@" --thinlto-jobs=$(nproc --all)' >> "$COMMON_KERNEL_FOLDER/ld-wrapper"
         chmod +x "$COMMON_KERNEL_FOLDER/ld-wrapper"
         
         KERNEL_BUILD_DATE=$(date -u)
@@ -1950,13 +1957,6 @@ runs:
         echo "Perform ccache eviction!"
         # 3h = 10800s using seconds to support older ccache
         ccache --evict-older-than 10800s
-        
-        echo "Perform LTO cache eviction!"
-        if [ -d "$LDCACHE_DIR" ]; then
-          # Delete LTO cache files modified more than 180 minutes (3 hours) ago
-          find "$LDCACHE_DIR" -type f -amin +180 -delete
-          find "$LDCACHE_DIR" -type d -empty -delete
-        fi
         
         if [ "${{ inputs.debug }}" == "true" ]; then
           if [ -f "${{ env.CCACHE_LOGFILE }}" ]; then
@@ -2180,7 +2180,7 @@ runs:
         
         ZIP_MODEL=$(echo "$OP_MODEL" | sed 's/-[0-9]\+\.[0-9]\+\.[0-9]\+$//')
         if [ "${{ env.OP_NMS }}" = true ]; then
-          ZIP_NAME="AK3_${ZIP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_${{ inputs.ksu_type }}_${KSUVER:-unknown}_NoMount.zip"
+          ZIP_NAME="AK3_${ZIP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_${{ inputs.ksu_type }}_${KSUVER:-unknown}.zip"
         else
           ZIP_NAME="AK3_${ZIP_MODEL}_${OP_OS_VERSION}_${KERNEL_FULL_VER}_${{ inputs.ksu_type }}_${KSUVER:-unknown}.zip"
         fi
@@ -2424,47 +2424,6 @@ runs:
         cache_path: ${{ env.CCACHE_DIR }}
         cache_key: ${{ inputs.ksu_type }}-v3-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
         cache_bucket: "ccache-cache"
-        debug: ${{ inputs.debug }}
-        github_token: ${{ inputs.github_token }}
-        working_dir: "./main-source"
-        compression_level: 6
-
-    - name: Trim LTO LD cache before saving
-      if: ${{ always() && env.OP_LTO != 'none' && steps.build_kernel_step.conclusion == 'success' }}
-      continue-on-error: true
-      shell: bash
-      run: |
-        set -euo pipefail
-        echo "::group::Trim LTO LD cache before saving"
-
-        if [ -d "${LDCACHE_DIR:-}" ]; then
-          echo "LTO cache directory: $LDCACHE_DIR"
-          echo "Size before trim:"
-          du -sh "$LDCACHE_DIR" || true
-
-          # Evict by access time, not mtime: ld.lld never updates a cache
-          # entry's mtime when it reuses it, so an mtime-based trim deletes the
-          # entire restored/reused cache on cache-hit builds — collapsing the
-          # saved archive to a few hundred bytes. atime tracks reuse and keeps
-          # the live working set.
-          find "$LDCACHE_DIR" -type f -amin +360 -delete || true
-          find "$LDCACHE_DIR" -type d -empty -delete     || true
-
-          echo "Size after trim:"
-          du -sh "$LDCACHE_DIR" || true
-        else
-          echo "No LTO cache directory found."
-        fi
-
-        echo "::endgroup::"
-
-    - name: Save LTO LD cache
-      if: ${{ always() && env.OP_LTO != 'none' && steps.build_kernel_step.conclusion == 'success' }}
-      uses: ./action-source/.github/actions/cache/save
-      with:
-        cache_path: ${{ env.LDCACHE_DIR }}
-        cache_key: ${{ inputs.ksu_type }}-v3-LTO-${{ env.OP_MODEL }}-${{ env.OP_OS_VERSION }}-${{ env.KERNEL_FULL_VER }}-${{ env.CLANG_VERSION_SHORT }}
-        cache_bucket: "lto-cache"
         debug: ${{ inputs.debug }}
         github_token: ${{ inputs.github_token }}
         working_dir: "./main-source"
