@@ -1907,7 +1907,11 @@ runs:
           
           ls -la "$DEBUG_ARTIFACTS_FOLDER"
         else
-          make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" -j"$(nproc --all)" O="$OUT" KCFLAGS="$KCFLAGS" KCPPFLAGS="$KCPPFLAGS" Image 2>&1 | tee build.log
+          # Build Image AND modules in ONE invocation with the same KCFLAGS/KCPPFLAGS so
+          # genksyms computes module CRCs (incl module_layout) consistently with the Image.
+          # A separate later 'make modules' without these flags shifts module_layout away
+          # from the device/stock KMI (0xe976b219 -> 0xde6485ed) and the .ko won't load.
+          make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" -j"$(nproc --all)" O="$OUT" KCFLAGS="$KCFLAGS" KCPPFLAGS="$KCPPFLAGS" Image modules 2>&1 | tee build.log
         fi
         
         BUILD_END=$(date +%s)
@@ -2083,12 +2087,11 @@ runs:
         export LD=ld.lld HOSTLD=ld.lld AR=llvm-ar NM=llvm-nm \
                OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
         export CC=clang HOSTCC=clang
-        # Build the module set so vmlinux/module exports populate $OUT/Module.symvers.
-        # cfg80211 is NOT built here (adding it to the common kernel bootloops OP15);
-        # its DEVICE CRCs are supplied out-of-band via EXTRA_SYMVERS (cfg80211.symvers
-        # extracted from the device's vendor_dlkm cfg80211.ko).
-        make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" \
-             -C "$COMMON_KERNEL_FOLDER" O="$OUT" -j"$(nproc --all)" modules
+        # NOTE: do NOT run 'make modules' here — the main build step already built
+        # Image+modules together (with KCFLAGS/KCPPFLAGS), so $OUT/Module.symvers already
+        # carries the correct KMI CRCs (module_layout=0xe976b219). Re-running modules
+        # without those flags reshifts genksyms and produces unloadable .ko (0xde6485ed).
+        # cfg80211 is NOT built here (bootloops OP15); its DEVICE CRCs come via EXTRA_SYMVERS.
         KERNEL_SRC="$OUT" \
         OUT_DIR="$AK3_FOLDER/modules" \
         KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
