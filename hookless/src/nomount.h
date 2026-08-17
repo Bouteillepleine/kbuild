@@ -101,6 +101,12 @@ struct nm_inode_info {
     unsigned long v_ino;
     u64 v_dino, v_pdino;
     dev_t v_dev, v_mapdev;
+    /* s_magic of the fs that REALLY backs this path. On overlayfs the synthesized
+     * inode's own i_sb is the overlay's, not the layer whose metadata shape a
+     * stock sibling shows -- so a size formula keyed on i_sb->s_magic silently
+     * does not apply where it is most needed. Captured via d_real_inode() at rule
+     * creation, exactly like v_mapdev. 0 = unknown, fall back to i_sb. */
+    u32 v_fsmagic;
     struct timespec64 v_atime, v_mtime, v_ctime;
     u64 v_attributes, v_attr_mask;   /* mirrored statx STATX_ATTR_* of the stock/sibling file */
     u32 v_blksize;                   /* mirrored st_blksize */
@@ -167,6 +173,12 @@ struct nomount_rule {
     /* dev a stock file at this path reports in /proc/<pid>/maps. Differs from
      * v_dev on overlayfs, where the mapping is of the LOWER file. */
     dev_t v_mapdev;
+    /* s_magic of the fs that REALLY backs this path. On overlayfs the synthesized
+     * inode's own i_sb is the overlay's, not the layer whose metadata shape a
+     * stock sibling shows -- so a size formula keyed on i_sb->s_magic silently
+     * does not apply where it is most needed. Captured via d_real_inode() at rule
+     * creation, exactly like v_mapdev. 0 = unknown, fall back to i_sb. */
+    u32 v_fsmagic;
     struct timespec64 v_atime, v_mtime, v_ctime;
     u64 v_attributes, v_attr_mask;   /* mirrored statx STATX_ATTR_* of the stock/sibling file */
     u32 v_blksize;                   /* mirrored st_blksize */
@@ -213,6 +225,12 @@ struct nm_rule_info {
     unsigned long v_ino;
     u64 v_dino, v_pdino;
     dev_t v_dev, v_mapdev;
+    /* s_magic of the fs that REALLY backs this path. On overlayfs the synthesized
+     * inode's own i_sb is the overlay's, not the layer whose metadata shape a
+     * stock sibling shows -- so a size formula keyed on i_sb->s_magic silently
+     * does not apply where it is most needed. Captured via d_real_inode() at rule
+     * creation, exactly like v_mapdev. 0 = unknown, fall back to i_sb. */
+    u32 v_fsmagic;
     struct timespec64 v_atime, v_mtime, v_ctime;
     u64 v_attributes, v_attr_mask;
     u32 v_blksize;

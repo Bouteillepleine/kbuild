@@ -137,6 +137,7 @@ static __always_inline bool nomount_get_rule_info(struct nomount_dir_node *dir_n
                 rule_info->v_pdino = rule->v_pdino;
                 rule_info->v_dev = rule->v_dev;
                 rule_info->v_mapdev = rule->v_mapdev;
+                rule_info->v_fsmagic = rule->v_fsmagic;
                 rule_info->v_atime = rule->v_atime;
                 rule_info->v_mtime = rule->v_mtime;
                 rule_info->v_ctime = rule->v_ctime;
@@ -336,6 +337,7 @@ static struct inode *nomount_create_new_inode(struct super_block *virtual_sb, st
     info->v_pdino = rule_info->v_pdino;
     info->v_dev = rule_info->v_dev;
     info->v_mapdev = rule_info->v_mapdev;
+    info->v_fsmagic = rule_info->v_fsmagic;
     info->v_atime = rule_info->v_atime;
     info->v_mtime = rule_info->v_mtime;
     info->v_ctime = rule_info->v_ctime;
@@ -951,7 +953,7 @@ static int nm_file_getattr(struct vfsmount *mnt, struct dentry *dentry, struct k
         stat->nlink = nm_vdir_nlink(info->dir_node);
         /* i_size stays at its 4096 placeholder otherwise; on erofs that is a
          * value no stock directory reports. Recount like nlink. */
-        if (v_inode->i_sb->s_magic == EROFS_SUPER_MAGIC_V1)
+        if ((info->v_fsmagic ? info->v_fsmagic : v_inode->i_sb->s_magic) == EROFS_SUPER_MAGIC_V1)
             stat->size = nm_vdir_size(info->dir_node,
                                       v_inode->i_sb->s_blocksize);
         return 0;
@@ -1021,7 +1023,7 @@ static int nm_file_getattr(IDMAP_ARG const struct path *path, struct kstat *stat
         stat->nlink = nm_vdir_nlink(info->dir_node);
         /* i_size stays at its 4096 placeholder otherwise; on erofs that is a
          * value no stock directory reports. Recount like nlink. */
-        if (v_inode->i_sb->s_magic == EROFS_SUPER_MAGIC_V1)
+        if ((info->v_fsmagic ? info->v_fsmagic : v_inode->i_sb->s_magic) == EROFS_SUPER_MAGIC_V1)
             stat->size = nm_vdir_size(info->dir_node,
                                       v_inode->i_sb->s_blocksize);
         return 0;
@@ -1847,6 +1849,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
     u16 anc_ctx_len = 0;
     bool have_anc = false;
     bool anc_ovl = false;      /* ancestor is on overlayfs => dirent ino != st_ino */
+    u32 anc_fsmagic = 0;       /* s_magic of the layer really backing the ancestor */
     u64 anc_dino = 0;          /* what the ancestor's own readdir reports for "." */
 
     while (p_len > 1) {
@@ -1887,6 +1890,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
                     anc_atime = ex->v_atime; anc_mtime = ex->v_mtime; anc_ctime = ex->v_ctime;
                     anc_ino = ex->v_ino; anc_blksize = ex->v_blksize;
                     anc_ovl = !!(ex->flags & NM_FLAG_OVL_INO);
+                    anc_fsmagic = ex->v_fsmagic;
                     anc_dino = ex->v_dino;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
                     anc_result_mask = ex->v_result_mask;
@@ -1944,6 +1948,9 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
                     anc_ctx_len = 0;
 #ifdef OVERLAYFS_SUPER_MAGIC
                 anc_ovl = p_path.dentry->d_sb->s_magic == OVERLAYFS_SUPER_MAGIC;
+                /* d_real_inode() steps through overlayfs to the layer actually
+                 * holding the dir, whose metadata shape the stock siblings show. */
+                anc_fsmagic = d_real_inode(p_path.dentry)->i_sb->s_magic;
 #endif
                 /* What ".." looks like one level down. Copy it from a real
                  * child of this directory: every stock sibling reports the same
@@ -2024,6 +2031,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
                 irule->v_gid = anc_gid;
                 irule->v_mode = anc_mode;
                 irule->flags |= NM_FLAG_HAVE_TIMES;
+                irule->v_fsmagic = anc_fsmagic;
                 irule->v_atime = anc_atime;
                 irule->v_mtime = anc_mtime;
                 irule->v_ctime = anc_ctime;
@@ -2454,6 +2462,7 @@ static struct nomount_rule *nm_alloc_rule(const char *v_path, const char *r_path
          * mmap+statx pair apart. d_real_inode() resolves to the lower inode on
          * overlayfs and to the inode itself everywhere else. */
         rule->v_mapdev = d_real_inode(v_path_struct.dentry)->i_sb->s_dev;
+        rule->v_fsmagic = d_real_inode(v_path_struct.dentry)->i_sb->s_magic;
         if (nm_path_stat(&v_path_struct, &kst) == 0) {
             rule->v_ino = kst.ino;
             rule->v_dev = kst.dev;
