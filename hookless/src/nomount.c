@@ -1005,8 +1005,14 @@ static int nomount_hijacked_getattr(IDMAP_ARG const struct path *path, struct ks
     const struct inode_operations *orig_iop;
     struct nomount_dir_node *d;
     struct nm_iop *nm_iop;
+    unsigned long fsmagic;
     int res, nld;
     s32 delta;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
+    struct dentry *dent = dentry;
+#else
+    struct dentry *dent = path->dentry;
+#endif
 
     rcu_read_lock();
     nm_iop = __get_nm(smp_load_acquire(&inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
@@ -1037,13 +1043,29 @@ static int nomount_hijacked_getattr(IDMAP_ARG const struct path *path, struct ks
 
     delta = READ_ONCE(d->size_delta);
     nld = nm_dir_nlink_delta(d);
+    fsmagic = inode->i_sb->s_magic;
 
     if (nld) {
         if ((int)stat->nlink + nld >= 2)
             stat->nlink = (unsigned int)((int)stat->nlink + nld);
     }
+    /* Which filesystem's size RULES apply here? On overlayfs the merged dir
+     * reports its lower layer's size verbatim -- measured on 7 samples, every
+     * one equal to the /my_*|/product erofs twin and matching the erofs formula
+     * exactly -- so the layer that matters is the lower one, not the overlay
+     * whose magic i_sb carries. Reading i_sb alone skipped every overlay-backed
+     * directory, including one observed carrying a real delta of 49.
+     * d_real_inode() steps through to that layer; on a non-overlay inode it
+     * returns the inode itself, so this is a no-op there. An overlay over
+     * ext4/f2fs correctly falls through: its lower reports block multiples that
+     * do not encode the entry set, and "correcting" it would invent a tell. */
+    {
+        struct inode *low = d_real_inode(dent);
+        if (low) fsmagic = low->i_sb->s_magic;
+    }
+
     /* erofs only, single block only -- see nm_dir_size_fix's reasoning. */
-    if (delta && inode->i_sb->s_magic == EROFS_SUPER_MAGIC_V1 &&
+    if (delta && fsmagic == EROFS_SUPER_MAGIC_V1 &&
         stat->size > 0 && stat->size < 4096) {
         loff_t fixed = stat->size + delta;
         if (fixed > 0 && fixed < 4096)
