@@ -18,6 +18,8 @@ set -euo pipefail
 : "${EXTRA_SYMVERS:=}"
 # driver list: "clone_url@git_sha". Pin SHAs — never a moving branch.
 : "${DRIVERS:?space-separated list of url@sha}"
+# per-driver source patches: $PATCH_DIR/<repo-name>/*.patch, applied in sort order.
+: "${PATCH_DIR:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/patches}"
 
 mkdir -p "$OUT_DIR"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
@@ -38,6 +40,18 @@ for spec in $DRIVERS; do
   echo "==> $name @ $sha"
   git clone --quiet "$url" "$src"
   ( cd "$src" && [ "$sha" != HEAD ] && git checkout --quiet "$sha" || true )
+
+  # Source patches for this driver, if any. Unlike a build failure this is FATAL:
+  # a patch that no longer applies means the pinned SHA moved out from under it,
+  # and silently shipping the unpatched driver is the bug we are fixing.
+  if [ -d "$PATCH_DIR/$name" ]; then
+    for patch in "$PATCH_DIR/$name"/*.patch; do
+      [ -e "$patch" ] || continue
+      echo "   patch: $(basename "$patch")"
+      git -C "$src" apply "$patch" \
+        || { echo "!! patch $(basename "$patch") does not apply to $name@$sha" >&2; exit 1; }
+    done
+  fi
 
   # These out-of-tree Realtek Makefiles hardcode GCC-only warning flags; clang
   # rejects them under -Werror,-Wunknown-warning-option. Strip the known ones
