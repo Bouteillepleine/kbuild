@@ -1,0 +1,23 @@
+diff --git a/os_dep/linux/ioctl_cfg80211.c b/os_dep/linux/ioctl_cfg80211.c
+--- a/os_dep/linux/ioctl_cfg80211.c
++++ b/os_dep/linux/ioctl_cfg80211.c
+@@ -2774,6 +2774,19 @@
+ 		goto exit;
+ 	}
+ 
++	/* ---- DEBUG BISECT ROUND 2 -- NOT FOR RELEASE ----
++	 * Round 1 showed the panic is in the mode-set half of this function.
++	 * Keep rtw_set_802_11_infrastructure_mode() (it sets WIFI_MONITOR_STATE
++	 * so the real monitor RX path is reachable) but skip rtw_setopmode_cmd(),
++	 * which is what reaches hw_var_set_monitor()'s raw RCR/RXFLTMAP writes.
++	 *   no panic -> rtw_setopmode_cmd / HAL owns it
++	 *   panic    -> rtw_set_802_11_infrastructure_mode owns it
++	 */
++	if (type == NL80211_IFTYPE_MONITOR) {
++		RTW_INFO("BISECT2: skipping rtw_setopmode_cmd for monitor\n");
++		ret = 0;
++		goto exit;
++	}
+ 	rtw_setopmode_cmd(padapter, networkType, RTW_CMDF_WAIT_ACK);
+ #ifdef CONFIG_MONITOR_MODE_XMIT
+ 	if (check_fwstate(pmlmepriv, WIFI_MONITOR_STATE) == _TRUE)
