@@ -1,0 +1,20 @@
+diff --git a/core/rtw_recv.c b/core/rtw_recv.c
+--- a/core/rtw_recv.c
++++ b/core/rtw_recv.c
+@@ -4079,7 +4079,15 @@
+ 	pskb->data = rframe->u.hdr.rx_data;
+ 	skb_set_tail_pointer(pskb, rframe->u.hdr.len);
+ 
+-	if (ndev->type == ARPHRD_IEEE80211_RADIOTAP) {
++	/* ---- DEBUG BISECT ROUND 3 -- NOT FOR RELEASE ----
++	 * Rounds 1-2 put the panic in the monitor RX path, ~2s after the
++	 * interface comes up (i.e. on the first received frames).
++	 * Skip the radiotap fill (which does skb_push()) and deliver the frame
++	 * bare, to split radiotap-fill from rtw_netif_rx().
++	 *   no panic -> rtw_fill_radiotap_hdr / skb_push owns it
++	 *   panic    -> rtw_recv_monitor / rtw_netif_rx owns it
++	 */
++	if (0 && ndev->type == ARPHRD_IEEE80211_RADIOTAP) {
+ 		/* fill radiotap header */
+ 		if (rtw_fill_radiotap_hdr(padapter, &rframe->u.hdr.attrib, (u8 *)pskb) == _FAIL) {
+ 			ret = _FAIL;
