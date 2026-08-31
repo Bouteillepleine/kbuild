@@ -53,6 +53,11 @@ for spec in $DRIVERS; do
     done
   fi
 
+  # CONFIG_WIFI_MONITOR=y: these Makefiles default it to n, which leaves
+  # NL80211_IFTYPE_MONITOR out of wiphy->interface_modes, so `iw dev X set type
+  # monitor` fails with -EOPNOTSUPP and injection is impossible. A make command-line
+  # variable overrides the Makefile assignment and adds -DCONFIG_WIFI_MONITOR.
+
   # These out-of-tree Realtek Makefiles hardcode GCC-only warning flags; clang
   # rejects them under -Werror,-Wunknown-warning-option. Strip the known ones
   # and add a backstop so any remaining unknown warning flag can't fail the build.
@@ -67,7 +72,8 @@ for spec in $DRIVERS; do
        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
        KCFLAGS="-Wno-unknown-warning-option -Wno-error" \
        KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMVERS" \
-       KSRC="$KERNEL_SRC" KVER="$kver" modules; then
+       KSRC="$KERNEL_SRC" KVER="$kver" \
+       CONFIG_WIFI_MONITOR=y modules; then
     echo "!! $name failed to build — skipping (non-fatal)" >&2; continue
   fi
 
@@ -89,4 +95,12 @@ for spec in $DRIVERS; do
   echo "   -> $OUT_DIR/$b"
 done
 
-echo ":: done. modules in $OUT_DIR"; cat "$manifest"
+# A skipped driver is non-fatal above, but it must not be silent: the resulting
+# module would ship missing .ko with no obvious sign. Surface it in the run summary.
+want=$(printf '%s\n' $DRIVERS | wc -l)
+got=$(wc -l < "$manifest")
+if [ "$got" -ne "$want" ]; then
+  echo "::warning::only $got of $want Nethunter drivers built — see the log for which were skipped"
+fi
+
+echo ":: done. modules in $OUT_DIR ($got/$want)"; cat "$manifest"
