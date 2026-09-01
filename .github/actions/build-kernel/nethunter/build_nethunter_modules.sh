@@ -53,10 +53,17 @@ for spec in $DRIVERS; do
     done
   fi
 
-  # CONFIG_WIFI_MONITOR=y: these Makefiles default it to n, which leaves
-  # NL80211_IFTYPE_MONITOR out of wiphy->interface_modes, so `iw dev X set type
-  # monitor` fails with -EOPNOTSUPP and injection is impossible. A make command-line
-  # variable overrides the Makefile assignment and adds -DCONFIG_WIFI_MONITOR.
+  # NOTE: do NOT set CONFIG_WIFI_MONITOR=y here. It does make monitor mode appear
+  # in `iw phy` and lets `iw dev X set type monitor` succeed -- but on 6.12 the
+  # device then hard-panics in softirq as soon as frames arrive
+  # (FST_FRAME=tasklet_action_common, reproduced 6x on OP15, recovery needs a
+  # forced power-key boot). Bisected: the driver's own monitor frame handling is
+  # NOT at fault -- making recv_frame_monitor() a complete no-op still panics --
+  # so the fault is upstream in the RX path once hw_var_set_monitor() programs
+  # RCR_AAP|RCR_APPFCS and opens the RXFLTMAPs, feeding raw 802.11 frames with FCS
+  # to validation written for station-mode traffic. Until that is fixed, leaving
+  # monitor unadvertised is what keeps the WebUI's 1-tap monitor from panicking
+  # the phone; `iw ... set type monitor` then just returns -EOPNOTSUPP, harmlessly.
 
   # These out-of-tree Realtek Makefiles hardcode GCC-only warning flags; clang
   # rejects them under -Werror,-Wunknown-warning-option. Strip the known ones
@@ -72,8 +79,7 @@ for spec in $DRIVERS; do
        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
        KCFLAGS="-Wno-unknown-warning-option -Wno-error" \
        KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMVERS" \
-       KSRC="$KERNEL_SRC" KVER="$kver" \
-       CONFIG_WIFI_MONITOR=y modules; then
+       KSRC="$KERNEL_SRC" KVER="$kver" modules; then
     echo "!! $name failed to build — skipping (non-fatal)" >&2; continue
   fi
 
