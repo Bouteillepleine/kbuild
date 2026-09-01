@@ -1,0 +1,19 @@
+diff --git a/core/rtw_recv.c b/core/rtw_recv.c
+--- a/core/rtw_recv.c
++++ b/core/rtw_recv.c
+@@ -4066,6 +4066,15 @@
+ 	int ret = _SUCCESS;
+ 	_queue *pfree_recv_queue = &padapter->recvpriv.free_recv_queue;
+ 
++	/* ---- DEBUG BISECT ROUND 6 -- NOT FOR RELEASE ----
++	 * Total no-op: drop every monitor frame immediately.
++	 *   still panics -> fault is upstream in the RX tasklet
++	 *   no panic     -> fault is inside this function
++	 */
++	if (rframe)
++		rtw_free_recvframe(rframe, pfree_recv_queue);
++	return _SUCCESS;
++
+ #ifdef CONFIG_WIFI_MONITOR
+ 	struct net_device *ndev = padapter->pnetdev;
+ 	_pkt *pskb = NULL;
