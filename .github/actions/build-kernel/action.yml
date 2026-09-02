@@ -1955,7 +1955,7 @@ runs:
         OUT_DIR="$AK3_FOLDER/modules" \
         KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
         EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device_wifi.symvers" \
-        DRIVERS="https://github.com/morrownr/8812au-20210820.git@8cac6f43316a56cc89cc8cb532cd6c6ae14c4805 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
+        DRIVERS="https://github.com/aircrack-ng/rtl8812au.git@734485506a30d6237c2deaad666a19f8ca5379f2 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd" \
         bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
         # --- in-kernel Wi-Fi drivers as modules, linked to the DEVICE's cfg80211/mac80211
         # CRCs (device_wifi.symvers). Only each subdir is built (M=); subsystems resolve

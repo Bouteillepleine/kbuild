@@ -74,8 +74,16 @@ for spec in $DRIVERS; do
     -e 's/-Wno-restrict//g' \
     -e 's/-Wno-maybe-uninitialized//g' {} +
 
+  # Per-driver make vars. aircrack-ng's tree names its module 88XXau; keep it as
+  # 8812au so wifi-ctl.sh's USB-ID -> driver-name mapping and the module layout
+  # stay unchanged. Must NOT be global: it would rename 8821au/88x2bu too.
+  extra_make=""
+  case "$name" in
+    rtl8812au) extra_make="USER_MODULE_NAME=8812au" ;;
+  esac
+
   # Non-fatal per driver: one bad driver must not sink the whole build.
-  if ! make -j"$(nproc)" -C "$src" \
+  if ! make -j"$(nproc)" -C "$src" $extra_make \
        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
        KCFLAGS="-Wno-unknown-warning-option -Wno-error" \
        KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMVERS" \
