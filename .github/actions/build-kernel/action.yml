@@ -1668,6 +1668,16 @@ runs:
         echo "============================================"
         
         make LD="$COMMON_KERNEL_FOLDER/ld-wrapper" HOSTLD="$COMMON_KERNEL_FOLDER/ld-wrapper" O="$OUT" gki_defconfig
+
+        # Give ramoops somewhere to put a panic. On OP15 the 2.25MB ramoops
+        # region is consumed entirely by console_size+pmsg_size, leaving
+        # record_size=0 -- so oopses are never recorded and /sys/fs/pstore stays
+        # empty no matter how many times the kernel dies. Shrink pmsg to free
+        # space for dump records.
+        # APPEND, never replace: the stock cmdline carries bootconfig and
+        # kvm-arm.mode=protected, and dropping either does not boot.
+        sed -i 's/^CONFIG_CMDLINE="\(.*\)"$/CONFIG_CMDLINE="\1 ramoops.record_size=0x20000 ramoops.pmsg_size=0x40000 ramoops.dump_oops=1"/' "$OUT/.config"
+        grep -m1 "^CONFIG_CMDLINE=" "$OUT/.config" || true
         
         LOCAL_LOCALVERSION="${CUSTOM_LOCALVERSION:--OP-WILD}"
         if [ -n "${LOCAL_LOCALVERSION:-}" ]; then
