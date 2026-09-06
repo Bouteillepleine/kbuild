@@ -1389,9 +1389,44 @@ runs:
         CONFIG_RUST=y
         EOF
 
+    - name: Add Nethunter wireless drivers, in-tree (EmberHeart)
+      shell: bash
+      if: ${{ env.OP_NETHUNTER_INTREE == 'true' }}
+      run: |
+        set -euo pipefail
+        echo "::group::Nethunter wireless drivers (in-tree)"
+        # Drivers and mac80211 come from ONE tree, so they agree on CRCs by
+        # construction. The OP15 path below instead links modules against the
+        # DEVICE's cfg80211/mac80211 -- necessary there because every config we
+        # added bootlooped it -- but the vendor mac80211 turned out to have a
+        # different struct ieee80211_ops layout, which is what stopped rtw88.
+        cd "$COMMON_KERNEL_FOLDER/drivers/net/wireless/realtek"
+        rm -rf rtw88
+        git clone --depth 1 https://github.com/lwfinger/rtw88.git
+        sed -i 's/$(CONFIG_RTW88)/m/g' Makefile
+        grep -v 'rtw88/Kconfig' Kconfig > Kconfig.nh && mv Kconfig.nh Kconfig
+        cd "$COMMON_KERNEL_FOLDER"
+        ./scripts/config --file arch/arm64/configs/gki_defconfig \
+          --enable CONFIG_NETDEVICES --enable CONFIG_WLAN \
+          --module CONFIG_CFG80211 --enable CONFIG_CFG80211_WEXT \
+          --module CONFIG_MAC80211 --enable CONFIG_MAC80211_LEDS \
+          --enable CONFIG_WLAN_VENDOR_ATH --module CONFIG_ATH9K_HW \
+          --module CONFIG_ATH9K_COMMON --module CONFIG_ATH9K_HTC \
+          --module CONFIG_CARL9170 \
+          --enable CONFIG_WLAN_VENDOR_MEDIATEK --module CONFIG_MT7601U \
+          --module CONFIG_MT76_CORE --module CONFIG_MT76_USB \
+          --module CONFIG_MT7921U --module CONFIG_MT7921_COMMON \
+          --enable CONFIG_WLAN_VENDOR_RALINK --module CONFIG_RT2X00 \
+          --module CONFIG_RT2800USB \
+          --enable CONFIG_WLAN_VENDOR_REALTEK
+        # scripts/config uppercases symbols; these carry a lowercase x
+        printf 'CONFIG_MT76x02_LIB=m\nCONFIG_MT76x02_USB=m\nCONFIG_MT76x2_COMMON=m\nCONFIG_MT76x2U=m\n' >> arch/arm64/configs/gki_defconfig
+        echo "in-tree wireless enabled; rtw88 replaced with lwfinger/rtw88"
+        echo "::endgroup::"
+
     - name: Add Nethunter configs (EmberHeart)
       shell: bash
-      if: ${{ env.OP_NETHUNTER == 'true' }}
+      if: ${{ env.OP_NETHUNTER == 'true' && env.OP_NETHUNTER_INTREE != 'true' }}
       run: |
         set -euo pipefail
         echo "::group::Apply Nethunter defconfig fragment"
@@ -1935,7 +1970,7 @@ runs:
 
     - name: Build Nethunter injection modules (EmberHeart)
       shell: bash
-      if: ${{ env.OP_NETHUNTER == 'true' }}
+      if: ${{ env.OP_NETHUNTER == 'true' && env.OP_NETHUNTER_INTREE != 'true' }}
       run: |
         set -euo pipefail
         echo "::group::Build Nethunter Wi-Fi injection modules"
@@ -2008,6 +2043,34 @@ runs:
           --module RTW88_8821C --module RTW88_8821CU --module RTW88_8723D --module RTW88_8723DU
         MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/realtek/rtw88 rtw88
         echo "   in-kernel Wi-Fi drivers -> AK3/modules ($(ls -1 "$MODZIP_DIR" 2>/dev/null | wc -l) files total)"
+        echo "::endgroup::"
+
+    - name: Collect Nethunter Wi-Fi modules, in-tree (EmberHeart)
+      shell: bash
+      if: ${{ env.OP_NETHUNTER_INTREE == 'true' }}
+      run: |
+        set -euo pipefail
+        echo "::group::Collect in-tree Wi-Fi modules"
+        OUT="$COMMON_KERNEL_FOLDER/out"
+        DEST="$AK3_FOLDER/modules"
+        mkdir -p "$DEST"
+        cfg="$OUT/.config"
+        sig_hash="$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$cfg")"; sig_hash="${sig_hash:-sha256}"
+        sig_key="$COMMON_KERNEL_FOLDER/$(sed -n 's/^CONFIG_MODULE_SIG_KEY="\(.*\)"/\1/p' "$cfg")"
+        n=0
+        for d in net/mac80211 net/wireless drivers/net/wireless; do
+          [ -d "$OUT/$d" ] || continue
+          for ko in $(find "$OUT/$d" -name "*.ko" | sort); do
+            llvm-strip --strip-debug "$ko" 2>/dev/null || true
+            if [ -x "$COMMON_KERNEL_FOLDER/scripts/sign-file" ] && [ -f "$sig_key" ]; then
+              "$COMMON_KERNEL_FOLDER/scripts/sign-file" "$sig_hash" "$sig_key" "${sig_key%.pem}.x509" "$ko" 2>/dev/null || true
+            fi
+            cp "$ko" "$DEST/" && n=$((n+1))
+          done
+        done
+        echo "collected $n Wi-Fi modules -> $DEST"
+        ls -1 "$DEST" 2>/dev/null | head -40
+        [ "$n" -gt 0 ] || echo "::warning::no Wi-Fi modules collected"
         echo "::endgroup::"
 
     - name: Create Kernel ZIP
