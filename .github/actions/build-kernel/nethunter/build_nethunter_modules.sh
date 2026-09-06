@@ -83,12 +83,20 @@ for spec in $DRIVERS; do
     rtl8812au) extra_make="USER_MODULE_NAME=8812au" ;;
   esac
 
+  # The vendor Realtek trees expose a "modules" target; lwfinger/rtw88 wraps
+  # the kbuild call in "all" instead, so asking for "modules" there fails with
+  # "No rule to make target".
+  make_target="modules"
+  case "$name" in
+    rtw88) make_target="all" ;;
+  esac
+
   # Non-fatal per driver: one bad driver must not sink the whole build.
   if ! make -j"$(nproc)" -C "$src" $extra_make \
        ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" $KMAKE \
        KCFLAGS="-Wno-unknown-warning-option -Wno-error" \
        KBUILD_EXTRA_SYMBOLS="$EXTRA_SYMVERS" \
-       KSRC="$KERNEL_SRC" KVER="$kver" modules; then
+       KSRC="$KERNEL_SRC" KVER="$kver" $make_target; then
     echo "!! $name failed to build — skipping (non-fatal)" >&2; continue
   fi
 
