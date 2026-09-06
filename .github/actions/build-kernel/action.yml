@@ -1678,6 +1678,30 @@ runs:
         # kvm-arm.mode=protected, and dropping either does not boot.
         sed -i 's/^CONFIG_CMDLINE="\(.*\)"$/CONFIG_CMDLINE="\1 ramoops.record_size=0x20000 ramoops.pmsg_size=0x40000 ramoops.dump_oops=1"/' "$OUT/.config"
         grep -m1 "^CONFIG_CMDLINE=" "$OUT/.config" || true
+
+        # The vendor dynamic-ramoops driver hands pstore platform data with
+        # record_size=0 and pmsg_size filling the whole region, so
+        # dump_mem_sz works out to exactly 0 and a panic has nowhere to be
+        # written -- which is why /sys/fs/pstore is empty on this device no
+        # matter how many times the kernel dies. pdata beats module params in
+        # ramoops_probe(), so the cmdline alone cannot fix it. Take the space
+        # for dump records out of pmsg, and only when record_size was asked
+        # for explicitly on the cmdline.
+        python3 - "$COMMON_KERNEL_FOLDER/fs/pstore/ram.c" <<'PYRAM'
+import io, sys
+p = sys.argv[1]
+s = io.open(p, encoding="utf-8", newline="").read()
+anchor = "\tcxt->size = pdata->mem_size;"
+add = ("\tif (!pdata->record_size && record_size > MIN_MEM_SIZE &&\n"
+       "\t    pdata->pmsg_size > record_size * 8) {\n"
+       "\t\tpdata->pmsg_size -= record_size * 8;\n"
+       "\t\tpdata->record_size = record_size;\n"
+       "\t}\n\n") + anchor
+if s.count(anchor) != 1:
+    sys.exit("ram.c anchor found %d times" % s.count(anchor))
+io.open(p, "w", encoding="utf-8", newline="").write(s.replace(anchor, add, 1))
+print("ram.c: dump records carved out of pmsg when record_size is given")
+PYRAM
         
         LOCAL_LOCALVERSION="${CUSTOM_LOCALVERSION:--OP-WILD}"
         if [ -n "${LOCAL_LOCALVERSION:-}" ]; then
