@@ -29,6 +29,12 @@ if [ -n "$EXTRA_SYMVERS" ] && [ -f "$EXTRA_SYMVERS" ]; then
   _filtered="$(mktemp)"
   grep -v "net/wireless/mac80211" "$EXTRA_SYMVERS" > "$_filtered" || true
   echo ":: symvers: dropped $(( $(wc -l < "$EXTRA_SYMVERS") - $(wc -l < "$_filtered") )) vendor mac80211 symbols"
+  if [ -n "${MAC80211_SYMVERS:-}" ] && [ -f "$MAC80211_SYMVERS" ]; then
+    cat "$MAC80211_SYMVERS" >> "$_filtered"
+    echo ":: symvers: added $(wc -l < "$MAC80211_SYMVERS") symbols from our own mac80211"
+  else
+    echo "::warning::MAC80211_SYMVERS missing - drivers will not resolve mac80211 symbols"
+  fi
   EXTRA_SYMVERS="$_filtered"
 fi
 # driver list: "clone_url@git_sha". Pin SHAs — never a moving branch.

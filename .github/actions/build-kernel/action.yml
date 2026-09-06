@@ -1971,12 +1971,6 @@ runs:
         # carries the correct KMI CRCs (module_layout=0xe976b219). Re-running modules
         # without those flags reshifts genksyms and produces unloadable .ko (0xde6485ed).
         # cfg80211 is NOT built here (bootloops OP15); its DEVICE CRCs come via EXTRA_SYMVERS.
-        KERNEL_SRC="$OUT" \
-        OUT_DIR="$AK3_FOLDER/modules" \
-        KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
-        EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device_wifi.symvers" \
-        DRIVERS="https://github.com/aircrack-ng/rtl8812au.git@734485506a30d6237c2deaad666a19f8ca5379f2 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd https://github.com/lwfinger/rtw88.git@a56bcd26e770257612a0803249cbd4095fc6feca" \
-        bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
         # --- in-kernel Wi-Fi drivers as modules, linked to the DEVICE's cfg80211/mac80211
         # CRCs (device_wifi.symvers). Only each subdir is built (M=); subsystems resolve
         # from device_wifi.symvers, so the boot Image is never touched (no bootloop).
@@ -2034,6 +2028,16 @@ runs:
           --module RTW88_CORE --module RTW88_USB --module RTW88_8822B --module RTW88_8822BU \
           --module RTW88_8821C --module RTW88_8821CU --module RTW88_8723D --module RTW88_8723DU
         MK olddefconfig >/dev/null 2>&1; build_sub drivers/net/wireless/realtek/rtw88 rtw88
+        # Built LAST, after mac80211 above: these link against OUR mac80211's
+        # CRCs rather than the vendor ones, so they load once the vendor
+        # mac80211 is swapped out at runtime.
+        KERNEL_SRC="$OUT" \
+        OUT_DIR="$AK3_FOLDER/modules" \
+        KMAKE="LLVM=1 LLVM_IAS=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy STRIP=llvm-strip" \
+        EXTRA_SYMVERS="${{ github.action_path }}/nethunter/device_wifi.symvers" \
+        MAC80211_SYMVERS="$CK/net/mac80211/Module.symvers" \
+        DRIVERS="https://github.com/aircrack-ng/rtl8812au.git@734485506a30d6237c2deaad666a19f8ca5379f2 https://github.com/morrownr/8821au-20210708.git@3a7cdb591b64d99d2670e455bde67c8ab338525b https://github.com/morrownr/88x2bu-20210702.git@249ca9584e1bc807934401211f2ea0df5d733bcd https://github.com/lwfinger/rtw88.git@a56bcd26e770257612a0803249cbd4095fc6feca" \
+        bash "${{ github.action_path }}/nethunter/build_nethunter_modules.sh"
         echo "   in-kernel Wi-Fi drivers -> AK3/modules ($(ls -1 "$MODZIP_DIR" 2>/dev/null | wc -l) files total)"
         echo "::endgroup::"
 
