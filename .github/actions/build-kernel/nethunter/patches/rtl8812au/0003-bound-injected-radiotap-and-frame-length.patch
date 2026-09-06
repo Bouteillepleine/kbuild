@@ -1,0 +1,36 @@
+diff --git a/core/rtw_xmit.c b/core/rtw_xmit.c
+index 8504dba..3228da6 100644
+--- a/core/rtw_xmit.c
++++ b/core/rtw_xmit.c
+@@ -4439,6 +4439,14 @@ s32 rtw_monitor_xmit_entry(struct sk_buff *skb, struct net_device *ndev)
+ 	if (unlikely(rtap_len < sizeof(struct ieee80211_radiotap_header)))
+ 		goto fail;
+ 
++	/* it_len is 16-bit and comes straight from the injected frame, but
++	 * rtap_buf is a 256-byte stack buffer. Without this the read below
++	 * walks off the end of the kernel stack whenever a caller sets a
++	 * large it_len.
++	 */
++	if (unlikely(rtap_len > sizeof(rtap_buf)))
++		goto fail;
++
+ 	len -= sizeof(struct ieee80211_radiotap_header);
+ 	rtap_remain = rtap_len - sizeof(struct ieee80211_radiotap_header);
+ 
+@@ -4464,6 +4472,16 @@ s32 rtw_monitor_xmit_entry(struct sk_buff *skb, struct net_device *ndev)
+ 	if (pmgntframe == NULL)
+ 		goto fail;
+ 
++	/* The frame is built in the ext xmit buffer, so the payload has to fit
++	 * what is left of it once the TX descriptor is accounted for. len is
++	 * derived from the caller's skb and was never checked against it.
++	 */
++	if (unlikely(len > (int)(MAX_XMIT_EXTBUF_SZ - TXDESC_OFFSET))) {
++		rtw_free_xmitbuf(pxmitpriv, pmgntframe->pxmitbuf);
++		rtw_free_xmitframe(pxmitpriv, pmgntframe);
++		goto fail;
++	}
++
+ 	_rtw_memset(pmgntframe->buf_addr, 0, WLANHDR_OFFSET + TXDESC_OFFSET);
+ 	pframe = (u8 *)(pmgntframe->buf_addr) + TXDESC_OFFSET;
+ //	_rtw_memcpy(pframe, (void *)checking, len);

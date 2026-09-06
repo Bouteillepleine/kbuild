@@ -1,0 +1,17 @@
+diff --git a/Makefile b/Makefile
+index 63ce43e..ec311c6 100755
+--- a/Makefile
++++ b/Makefile
+@@ -658,6 +658,12 @@ endif
+ ifeq ($(CONFIG_PLATFORM_I386_PC), y)
+ EXTRA_CFLAGS += -DCONFIG_LITTLE_ENDIAN
+ EXTRA_CFLAGS += -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT
++# Allocate TX buffers with usb_alloc_coherent rather than kmalloc. Every ARM
++# and embedded platform profile in this Makefile does so; only the x86 desktop
++# profile does not, and that is the profile an arm64 cross-build falls into.
++# The adapter dies on its first transmit on OP15 (SM8850, arm64, non-coherent
++# DMA behind an IOMMU) while this driver injects fine on x86.
++EXTRA_CFLAGS += -DCONFIG_USE_USB_BUFFER_ALLOC_TX
+ SUBARCH := $(shell uname -m | sed -e "s/i.86/i386/; s/ppc/powerpc/; s/armv.l/arm/; s/aarch64/arm64/; s/riscv.*/riscv/;")
+ ARCH ?= $(SUBARCH)
+ CROSS_COMPILE ?=
