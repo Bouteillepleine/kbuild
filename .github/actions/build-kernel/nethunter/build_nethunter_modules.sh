@@ -16,6 +16,21 @@ set -euo pipefail
 # supplies the DEVICE's real CRCs so the .ko loads on the running kernel WITHOUT
 # adding cfg80211 to the common kernel (which bootloops OP15).
 : "${EXTRA_SYMVERS:=}"
+
+# We now ship our OWN mac80211 (the device's is built from OPlus's soc-repo
+# tree and has a different struct ieee80211_ops layout). device_wifi.symvers
+# carries the VENDOR mac80211 CRCs, so linking against it produces drivers
+# that refuse to load on ours:
+#   rtw_usb: disagrees about version of symbol ieee80211_alloc_hw_nm
+# Strip mac80211's symbols so kbuild falls back to our own Module.symvers for
+# them. cfg80211 stays on the device's CRCs -- our mac80211 loads against the
+# device cfg80211 fine, so only mac80211 diverges.
+if [ -n "$EXTRA_SYMVERS" ] && [ -f "$EXTRA_SYMVERS" ]; then
+  _filtered="$(mktemp)"
+  grep -v "net/wireless/mac80211" "$EXTRA_SYMVERS" > "$_filtered" || true
+  echo ":: symvers: dropped $(( $(wc -l < "$EXTRA_SYMVERS") - $(wc -l < "$_filtered") )) vendor mac80211 symbols"
+  EXTRA_SYMVERS="$_filtered"
+fi
 # driver list: "clone_url@git_sha". Pin SHAs — never a moving branch.
 : "${DRIVERS:?space-separated list of url@sha}"
 # per-driver source patches: $PATCH_DIR/<repo-name>/*.patch, applied in sort order.
