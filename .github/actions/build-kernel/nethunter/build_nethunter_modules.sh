@@ -33,6 +33,7 @@ kver="$(cat "$KERNEL_SRC/include/config/kernel.release")"
 echo ":: target kernelrelease=$kver  sig_hash=$sig_hash"
 
 manifest="$OUT_DIR/manifest.txt"; : > "$manifest"
+built_drivers=0
 
 for spec in $DRIVERS; do
   url="${spec%@*}"; sha="${spec##*@}"; name="$(basename "$url" .git)"
@@ -91,28 +92,33 @@ for spec in $DRIVERS; do
     echo "!! $name failed to build — skipping (non-fatal)" >&2; continue
   fi
 
-  ko="$(find "$src" -maxdepth 1 -name '*.ko' | head -1)"
-  [ -n "$ko" ] || { echo "!! no .ko produced for $name — skipping" >&2; continue; }
+  # rtw88 is a module CHAIN (rtw_core, rtw_usb, rtw_88xxa, rtw_8812a,
+  # rtw_8812au, ...) rather than the single .ko the vendor Realtek trees
+  # produce, so take everything the tree built, not just the first file.
+  kos="$(find "$src" -maxdepth 1 -name '*.ko' | sort)"
+  [ -n "$kos" ] || { echo "!! no .ko produced for $name — skipping" >&2; continue; }
 
-  # ORDER MATTERS: strip first, then sign (signature is appended last).
-  "$STRIP" --strip-debug "$ko"
-  if [ -x "$KERNEL_SRC/scripts/sign-file" ] && [ -f "$sig_key" ]; then
-    "$KERNEL_SRC/scripts/sign-file" "$sig_hash" "$sig_key" "$sig_crt" "$ko"
-    echo "   signed with $sig_hash"
-  else
-    echo "   ⚠️ signing key/tool absent — shipping unsigned (loads with taint if MODULE_SIG_FORCE off)"
-  fi
+  for ko in $kos; do
+    # ORDER MATTERS: strip first, then sign (signature is appended last).
+    "$STRIP" --strip-debug "$ko"
+    if [ -x "$KERNEL_SRC/scripts/sign-file" ] && [ -f "$sig_key" ]; then
+      "$KERNEL_SRC/scripts/sign-file" "$sig_hash" "$sig_key" "$sig_crt" "$ko"
+    else
+      echo "   ⚠️ signing key/tool absent — shipping unsigned"
+    fi
 
-  cp "$ko" "$OUT_DIR/"
-  b="$(basename "$ko")"
-  printf '%s\t%s\t%s\n' "$b" "$sha" "$(sha256sum "$OUT_DIR/$b" | cut -d" " -f1)" >> "$manifest"
-  echo "   -> $OUT_DIR/$b"
+    cp "$ko" "$OUT_DIR/"
+    b="$(basename "$ko")"
+    printf '%s\t%s\t%s\n' "$b" "$sha" "$(sha256sum "$OUT_DIR/$b" | cut -d" " -f1)" >> "$manifest"
+    echo "   -> $OUT_DIR/$b"
+  done
+  built_drivers=$((built_drivers + 1))
 done
 
 # A skipped driver is non-fatal above, but it must not be silent: the resulting
 # module would ship missing .ko with no obvious sign. Surface it in the run summary.
 want=$(printf '%s\n' $DRIVERS | wc -l)
-got=$(wc -l < "$manifest")
+got=$built_drivers
 if [ "$got" -ne "$want" ]; then
   echo "::warning::only $got of $want Nethunter drivers built — see the log for which were skipped"
 fi

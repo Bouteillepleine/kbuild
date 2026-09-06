@@ -1,0 +1,19 @@
+diff --git a/Makefile b/Makefile
+index 2a26a06..4fec4bc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -37,14 +37,12 @@ NO_SKIP_SIGN := y
+ endif
+ 
+ ccflags-y += -O2 -std=gnu11 -Wno-declaration-after-statement
+-ccflags-y += -DCONFIG_RTW88_LEDS=1
+ ccflags-y += -DCONFIG_RTW88_DEBUG=1
+ ccflags-y += -DCONFIG_RTW88_DEBUGFS=1
+ ccflags-y += -D__CHECK_ENDIAN__
+ 
+ obj-m		+= rtw_core.o
+ rtw_core-objs	+= main.o \
+-		   led.o \
+ 		   mac80211.o \
+ 		   util.o \
+ 		   debug.o \
