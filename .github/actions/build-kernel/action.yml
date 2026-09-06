@@ -1687,21 +1687,7 @@ runs:
         # ramoops_probe(), so the cmdline alone cannot fix it. Take the space
         # for dump records out of pmsg, and only when record_size was asked
         # for explicitly on the cmdline.
-        python3 - "$COMMON_KERNEL_FOLDER/fs/pstore/ram.c" <<'PYRAM'
-import io, sys
-p = sys.argv[1]
-s = io.open(p, encoding="utf-8", newline="").read()
-anchor = "\tcxt->size = pdata->mem_size;"
-add = ("\tif (!pdata->record_size && record_size > MIN_MEM_SIZE &&\n"
-       "\t    pdata->pmsg_size > record_size * 8) {\n"
-       "\t\tpdata->pmsg_size -= record_size * 8;\n"
-       "\t\tpdata->record_size = record_size;\n"
-       "\t}\n\n") + anchor
-if s.count(anchor) != 1:
-    sys.exit("ram.c anchor found %d times" % s.count(anchor))
-io.open(p, "w", encoding="utf-8", newline="").write(s.replace(anchor, add, 1))
-print("ram.c: dump records carved out of pmsg when record_size is given")
-PYRAM
+        python3 -c "import io,sys;T=chr(9);N=chr(10);p='$COMMON_KERNEL_FOLDER/fs/pstore/ram.c';s=io.open(p,encoding='utf-8',newline='').read();a=T+'cxt->size = pdata->mem_size;';add=T+'if (!pdata->record_size && record_size > MIN_MEM_SIZE &&'+N+T+'    pdata->pmsg_size > record_size * 8) {'+N+T+T+'pdata->pmsg_size -= record_size * 8;'+N+T+T+'pdata->record_size = record_size;'+N+T+'}'+N+N+a;sys.exit('ram.c anchor x%d'%s.count(a)) if s.count(a)!=1 else None;io.open(p,'w',encoding='utf-8',newline='').write(s.replace(a,add,1));print('ram.c: dump records carved out of pmsg')"
         
         LOCAL_LOCALVERSION="${CUSTOM_LOCALVERSION:--OP-WILD}"
         if [ -n "${LOCAL_LOCALVERSION:-}" ]; then
