@@ -65,8 +65,9 @@ fi
 
 # Paths OUTSIDE /data/adb are worth hiding, because nothing denies traversal
 # first -- these are reachable by apps today. Add your own; they do fire.
-for p in /data/local/tmp/susfs_guard_lkm.ko /data/local/tmp/susfs_new.ko; do
-    [ -e "$p" ] && "$SUSFS" add_sus_path "$p" >/dev/null 2>&1 && echo "hook:   hid $p"
+for p in /data/local/tmp/susfs*.ko /sdcard/susfs*.ko; do
+    [ -e "$p" ] || continue
+    "$SUSFS" add_sus_path "$p" >/dev/null 2>&1 && echo "hook:   hid $p"
 done
 
 # Last: every rule above is logged to dmesg as it is added, which is its own
