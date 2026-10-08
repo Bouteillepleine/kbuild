@@ -18,19 +18,32 @@
 #    into ENOENT. Verified: app stat -> "No such file or directory", root
 #    unaffected, counters moved.
 #
-# 3. The cost: upstream SUSFS hides only from apps it has umounted
-#    (TIF_PROC_UMOUNTED && uid >= 10000). This LKM cannot read that flag and
-#    uses "uid >= 10000" alone, so it hides from EVERY app -- the KernelSU
-#    manager included. If the manager reads /data/adb as its own app uid, its
-#    module list breaks. Its WebUI shell runs as root and is unaffected.
-#    THIS IS THE ONE THING TO TEST ON YOUR SETUP. Recovery needs no manager:
+# 3. Who it hides from is KernelSU's business, not a guess. Upstream SUSFS hides
+#    only from apps it has umounted (TIF_PROC_UMOUNTED && uid >= 10000). An LKM
+#    cannot read that thread flag, so this module USED to test "uid >= 10000"
+#    alone and hid from EVERY app, the KernelSU manager included -- which is the
+#    only reason the switch below defaulted to 0.
+#    It now calls KernelSU's own ksu_uid_should_umount(), the same function its
+#    UID_SHOULD_UMOUNT ioctl wraps, so hiding applies to exactly the apps you
+#    ticked "Umount modules" for. The manager is excluded by KernelSU itself,
+#    and so are apps you granted su. Check which build you are running:
+#      dmesg | grep 'hide gate'
+#    "following KernelSU's DenyList" -> safe to hide /data/adb.
+#    "falling back to uid >= 10000"  -> old behaviour, set HIDE_DATA_ADB=0.
+#
+# 4. Follows from 3: if your global "Umount modules" default is off and an app
+#    is not in the denylist, nothing is hidden from it. That is intended -- it
+#    is what upstream does -- but it means the rules look inert until you tick
+#    the apps you actually care about.
+#
+#    Recovery never needs the manager:
 #      adb shell su -c 'echo "del /data/adb" > /proc/susfs_path'
 #    or just reboot with the hook removed.
 # ===========================================================================
 
-# 0 = leave /data/adb visible (manager definitely keeps working, leak stays)
-# 1 = hide it from all apps (closes the leak, may break the manager)
-HIDE_DATA_ADB=0
+# 1 = hide /data/adb from the apps KernelSU umounts for (closes the stat leak)
+# 0 = leave it visible
+HIDE_DATA_ADB=1
 
 SUSFS=/data/adb/ksu/bin/ksu_susfs
 [ -x "$SUSFS" ] || { echo "hook: no ksu_susfs"; exit 0; }
@@ -42,7 +55,7 @@ echo "hook: susfs $("$SUSFS" show version 2>/dev/null) is up"
 
 if [ "$HIDE_DATA_ADB" = "1" ]; then
     if "$SUSFS" add_sus_path /data/adb >/dev/null 2>&1; then
-        echo "hook:   /data/adb hidden from app uids"
+        echo "hook:   /data/adb hidden from denylisted apps"
     else
         echo "hook:   FAILED to hide /data/adb"
     fi
