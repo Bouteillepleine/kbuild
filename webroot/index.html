@@ -98,6 +98,17 @@ input[type=file]{display:none}
 .btn.secondary:disabled,.btn.danger:disabled{background:var(--secondary);color:var(--actions)}
 .btn.sm{min-height:34px;padding:0 14px;font-size:14px;border-radius:12px;background:var(--secondary)}
 
+/* Switch (miuix Switch) */
+.switch{position:relative;width:50px;height:30px;flex:none}
+.switch input{opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.switch .track{position:absolute;inset:0;border-radius:15px;background:var(--secondary);transition:background .18s;pointer-events:none}
+.switch .knob{position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .18s;pointer-events:none}
+.switch input:checked~.track{background:var(--primary)}
+.switch input:checked~.knob{transform:translateX(20px)}
+.switch input:disabled~.track{opacity:.45}
+.switch input:disabled~.knob{opacity:.7}
+
 pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;
   background:var(--code);border-radius:12px;color:var(--summary);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>
@@ -126,7 +137,7 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <input id="ko" type="file" accept=".ko,application/octet-stream">
   <div class="note" id="compat">Build compatibility is shown after you pick a file. It is informational only and never blocks loading.</div>
   <div class="progress"><div class="fill" id="bar"></div></div>
-  <div class="transfer" id="transfer"></div>
+  <div class="transfer" id="transfer" role="status" aria-live="polite"></div>
 </section>
 <div class="actions">
   <button class="btn primary" id="load" disabled>Load once</button>
@@ -138,6 +149,11 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
 <section class="card">
   <div class="item"><div class="body"><div class="title">Module</div><div class="sum mono" id="liveName">—</div></div><div class="end" id="liveState">—</div></div>
   <div class="item"><div class="body"><div class="title">Post-load hook</div><div class="sum mono">/data/adb/lkm/post-insmod.sh</div></div><div class="end" id="hookState">—</div></div>
+  <label class="item" id="hideRow" style="display:none">
+    <div class="body"><div class="title">Hide /data/adb</div><div class="sum" id="hideSum">From the apps KernelSU umounts modules for</div></div>
+    <span class="switch"><input type="checkbox" id="hideToggle"><span class="track"></span><span class="knob"></span></span>
+  </label>
+  <div class="note" id="hookRan" style="display:none"></div>
   <div class="note" id="liveNote">Unload and reload take effect immediately — no reboot. A module that filters itself out of <span class="mono">/proc/modules</span> is still detected here, via <span class="mono">/sys/module</span>.</div>
 </section>
 <div class="actions">
@@ -145,6 +161,12 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <button class="btn danger" id="unload" disabled>Unload now</button>
   <button class="btn secondary" id="hookBtn">Install SUSFS hook</button>
 </div>
+
+<div class="small-title" id="susfsTitle" style="display:none">SUSFS<button class="link-btn" id="refreshSusfs">Refresh</button></div>
+<section class="card" id="susfsCard" style="display:none">
+  <div class="item"><div class="body"><div class="title">Rules in kernel</div><div class="sum" id="susfsBreak">—</div></div><div class="end" id="susfsRules">—</div></div>
+  <div class="item"><div class="body"><div class="title">Hide gate</div><div class="sum" id="susfsGateSum">Which apps the module hides from</div></div><div class="end" id="susfsGate">—</div></div>
+</section>
 
 <div class="small-title">Loaded modules<button class="link-btn" id="refreshModules">Refresh</button></div>
 <section class="card"><pre id="modules" style="margin-top:12px">Loading…</pre></section>
@@ -189,12 +211,19 @@ const esc = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').repl
 const quote = s => "'" + String(s).replaceAll("'", "'\\''") + "'";
 const toast = m => { try { bridge.toast(String(m)); } catch (e) {} };
 let busy = false;
+// busy means "an operation is in flight" and NOTHING else.  It used to double as "no file
+// is staged", and because the page starts with setBusy(true) and refreshAll() never clears
+// it, Remove/Unload/Reload were dead on every fresh open until a .ko was staged - the one
+// control you need to recover from a bad module was the one you could not reach.
+// What needs a staged file (load/boot) asks selectedReady; everything else asks busy only.
 const setBusy = b => {
   busy = b;
   $('load').disabled = b || !selectedReady;
   $('boot').disabled = b || !selectedReady;
-  // These were clickable mid-transfer before, which let a Remove race a write.
+  // Remove is gated on busy so it cannot race a write - but only on busy.
   $('remove').disabled = b;
+  $('hookBtn').disabled = b;
+  $('hideToggle').disabled = b;
   refreshLiveButtons();
 };
 // Enabled only when the module is actually in the kernel right now.
@@ -282,13 +311,54 @@ async function refreshLive() {
   liveLoaded = liveName ? (await run(`[ -d /sys/module/${quote(liveName)} ]`)).errno === 0 : false;
   // A module that provides its own control ABI can only be configured after it loads,
   // which is what the hook is for; say whether one is in place.
-  const hook = (await run(`[ -s ${quote(ROOT + '/post-insmod.sh')} ]`)).errno === 0;
+  const hookPath = ROOT + '/post-insmod.sh';
+  const hook = (await run(`[ -s ${quote(hookPath)} ]`)).errno === 0;
   setEnd($('hookState'), hook ? 'Present' : 'None', hook ? 'ok' : '');
   $('hookBtn').textContent = hook ? 'Remove SUSFS hook' : 'Install SUSFS hook';
+
+  // The hook's one switch used to be reachable only by editing a 0600 file by hand.
+  $('hideRow').style.display = hook ? '' : 'none';
+  if (hook) {
+    const v = await sh(`sed -n 's/^HIDE_DATA_ADB=\\([01]\\).*/\\1/p' ${quote(hookPath)} | head -1`);
+    $('hideToggle').checked = v === '1';
+    $('hideSum').textContent = v === '1' || v === '0'
+      ? 'From the apps KernelSU umounts modules for — not the manager'
+      : 'HIDE_DATA_ADB is not set to 0 or 1 in the hook';
+  }
+  // What the hook actually did the last time it ran, straight out of the loader log.
+  const ran = await sh(`sed -n '/--- post-insmod hook ---/,$p' ${quote(paths.log)} 2>/dev/null | grep '^hook:' | tail -n 8`);
+  $('hookRan').style.display = ran ? '' : 'none';
+  $('hookRan').className = 'note';
+  if (ran) $('hookRan').innerHTML = 'Last run<span class="mono">' + esc(ran) + '</span>';
   $('liveName').textContent = liveName || '\u2014';
   setEnd($('liveState'), !liveName ? '\u2014' : liveLoaded ? 'In kernel' : 'Not loaded',
          !liveName ? '' : liveLoaded ? 'ok' : 'warn');
   refreshLiveButtons();
+}
+// Shown only when the module in the kernel provides /proc/susfs_path - this is a generic
+// .ko loader, so a SUSFS panel has no business appearing for an unrelated module.
+async function refreshSusfs() {
+  const live = (await run('[ -r /proc/susfs_path ]')).errno === 0;
+  $('susfsTitle').style.display = $('susfsCard').style.display = live ? '' : 'none';
+  if (!live) return;
+  const r = await run("T=$(grep -c '^path=' /proc/susfs_path 2>/dev/null); " +
+                      "S=$(grep -c 'ours:' /proc/susfs_path 2>/dev/null); " +
+                      // The hook records this at load; dmesg has usually rotated past it by now
+                      // (and the hook turns susfs logging off), so the file is the real source.
+                      "G=$(cat /data/adb/lkm/hide-gate 2>/dev/null); " +
+                      "[ -n \"$G\" ] || G=$(dmesg 2>/dev/null | grep 'hide gate' | tail -1); " +
+                      "printf '%s\\n%s\\n%s\\n' \"$T\" \"$S\" \"$G\"");
+  const [tot = '', prot = '', gate = ''] = r.stdout.split('\n').map(x => x.trim());
+  const t = Number(tot), sp = Number(prot);
+  setEnd($('susfsRules'), Number.isFinite(t) && tot !== '' ? String(t) : '—', t > 0 ? 'ok' : '');
+  $('susfsBreak').textContent = Number.isFinite(t) && Number.isFinite(sp) && tot !== ''
+    ? sp + ' self-protection + ' + (t - sp) + ' yours' : '—';
+  // dmesg rotates, and the hook turns susfs logging off, so "unknown" is a real answer here.
+  const deny = gate.indexOf('following') >= 0, fallback = gate.indexOf('is not') >= 0;
+  setEnd($('susfsGate'), deny ? 'DenyList' : fallback ? 'uid >= 10000' : 'Unknown', deny ? 'ok' : fallback ? 'warn' : '');
+  $('susfsGateSum').textContent = deny ? 'Follows KernelSU\u2019s DenyList; the manager is never hidden from'
+    : fallback ? 'Fallback: hides from EVERY app, the manager included'
+    : 'Not in the kernel log (it rotates, and the hook turns susfs logging off)';
 }
 async function refreshLog() { $('log').textContent = await sh(`tail -n 120 ${paths.log} 2>/dev/null`) || 'No loader log yet.'; }
 async function refreshKlog() {
@@ -304,7 +374,7 @@ async function refreshWarning() {
 // The manager card shows module.prop's description, and desc.sh rewrites it from the
 // live state - so a load/unload done here is reflected on the card without a reboot.
 const refreshCard = () => run('sh /data/adb/modules/susfs_lkm_loader/desc.sh >/dev/null 2>&1');
-const refreshAll = () => Promise.all([refreshDevice(), refreshModules(), refreshLog(), refreshKlog(), refreshWarning(), refreshLive(), refreshCard()]);
+const refreshAll = () => Promise.all([refreshDevice(), refreshModules(), refreshLog(), refreshKlog(), refreshWarning(), refreshLive(), refreshSusfs(), refreshCard()]);
 
 function toBase64(u8) {
   let bin = '';
@@ -372,7 +442,8 @@ async function writeFile(bytes, target) {
 async function stage(file) {
   selectedReady = false; setBusy(true);
   if (!file || !/\.ko$/i.test(file.name) || file.size <= 4096) {
-    note('bad', 'Not a valid kernel module file.'); return;
+    note('bad', 'Not a valid kernel module file.');
+    setBusy(false); return;          /* or the page stays inert until a valid file arrives */
   }
   note('', 'Preparing module…');
   try {
@@ -392,7 +463,7 @@ async function stage(file) {
 }
 
 async function loadSelected(persistent) {
-  if (!selected || !selectedReady) return;
+  if (!selectedReady) return;      /* selectedReady, not `selected`: a staging restored on open has no File */
   setBusy(true);
   try {
     if (persistent) {
@@ -480,11 +551,40 @@ $('hookBtn').addEventListener('click', async () => {
     const r = await run(`[ -f ${quote(src)} ] && cp -f ${quote(src)} ${quote(live)} && chmod 700 ${quote(live)} && sync`);
     $('transfer').textContent = r.errno
       ? 'Could not install the hook: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno)
-      : 'Hook installed. Read it before enabling HIDE_DATA_ADB - it can hide /data/adb from the manager too.';
+      : 'Hook installed. /data/adb is hidden from the apps KernelSU umounts modules for; the manager is not one of them.';
   }
   setBusy(false);
   refreshAll();
 });
+// Flip the hook's one switch, and - when the module is already in the kernel - apply it now
+// rather than at the next load, which is what /proc/susfs_path exists for.
+$('hideToggle').addEventListener('change', async e => {
+  const want = e.target.checked ? '1' : '0';
+  const hookPath = ROOT + '/post-insmod.sh';
+  setBusy(true);
+  try {
+    const w = await run(`sed -i 's/^HIDE_DATA_ADB=.*/HIDE_DATA_ADB=${want}/' ${quote(hookPath)} && sync`);
+    if (w.errno) throw new Error((w.stdout || w.stderr).trim() || 'exit ' + w.errno);
+    const check = await sh(`sed -n 's/^HIDE_DATA_ADB=\\([01]\\).*/\\1/p' ${quote(hookPath)} | head -1`);
+    if (check !== want) throw new Error('the hook still reads HIDE_DATA_ADB=' + (check || '?'));
+    if ((await run('[ -w /proc/susfs_path ]')).errno === 0) {
+      const verb = want === '1' ? 'add' : 'del';
+      await run(`echo ${quote(verb + ' /data/adb')} > /proc/susfs_path`);
+      const now = await sh("grep -c '^path=/data/adb  ' /proc/susfs_path 2>/dev/null");
+      $('transfer').textContent = (now === '1')
+        ? '/data/adb is hidden now, and at every boot.'
+        : (want === '0' ? '/data/adb is visible again.' : 'Saved, but the rule did not take — see the kernel log.');
+    } else {
+      $('transfer').textContent = 'Saved. It applies the next time the module loads.';
+    }
+  } catch (err) {
+    $('transfer').textContent = 'Could not change the hook: ' + String(err.message || err);
+    toast('Could not change the hook');
+  }
+  setBusy(false);
+  refreshLive(); refreshSusfs();
+});
+$('refreshSusfs').addEventListener('click', refreshSusfs);
 $('refreshLive').addEventListener('click', refreshLive);
 
 $('ko').addEventListener('change', async e => {
@@ -497,7 +597,7 @@ $('ko').addEventListener('change', async e => {
     $('filename').textContent = 'Choose a .ko file';
     $('filemeta').textContent = 'From your device storage';
     note('', HINT);
-    setBusy(true); return;
+    setBusy(false); return;
   }
   $('filename').textContent = selected.name;
   $('filemeta').textContent = (selected.size / 1048576).toFixed(2) + ' MiB';
@@ -517,13 +617,27 @@ $('refreshModules').addEventListener('click', refreshModules);
 $('refreshLog').addEventListener('click', refreshLog);
 $('refreshKlog').addEventListener('click', refreshKlog);
 
-setBusy(true);
+// A .ko staged earlier is still on disk when the page is reopened.  Without this, Reload
+// silently fell back to the SAVED module while the UI showed no file at all.
+async function restoreStaged() {
+  const size = Number(await sh(`wc -c < ${quote(paths.selected)} 2>/dev/null`));
+  if (!Number.isFinite(size) || size <= 4096) return;
+  const n = await sh(`strings ${quote(paths.selected)} 2>/dev/null | sed -n 's/^name=\\([A-Za-z0-9_-]\\{1,\\}\\)$/\\1/p' | head -1`);
+  selectedName = /^[A-Za-z0-9_-]+$/.test(n) ? n : '';
+  selectedReady = true;
+  $('filename').textContent = selectedName ? selectedName + '.ko' : 'Staged module';
+  $('filemeta').textContent = (size / 1048576).toFixed(2) + ' MiB · staged earlier';
+  note('ok', 'A module staged earlier is still here and ready to load.');
+  setBusy(false);
+}
+
+setBusy(false);
 if (!bridge) {
   $('transfer').textContent = 'KernelSU WebUI bridge is unavailable. Open this page from the KernelSU manager.';
   $('kernel').textContent = $('kbuild').textContent = $('arch').textContent = 'Unavailable';
   $('kernel').classList.add('bad');
   document.querySelectorAll('button').forEach(b => b.disabled = true);
-} else refreshAll();
+} else { refreshAll().then(restoreStaged); }
 </script>
 </body>
 </html>

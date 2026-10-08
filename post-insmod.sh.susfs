@@ -70,6 +70,16 @@ for p in /data/local/tmp/susfs*.ko /sdcard/susfs*.ko; do
     "$SUSFS" add_sus_path "$p" >/dev/null 2>&1 && echo "hook:   hid $p"
 done
 
+# Record which hide gate the module reported at init, BEFORE logging goes off and before
+# dmesg rotates past it. It is the one line that says whether hiding follows KernelSU's
+# DenyList or the old uid >= 10000 proxy, it is printed once per load, and by the time
+# anyone looks it is usually gone - so the WebUI reads this file, not dmesg.
+GATE=$(dmesg 2>/dev/null | grep 'hide gate' | tail -1)
+if [ -n "$GATE" ]; then
+    printf '%s\n' "$GATE" > /data/adb/lkm/hide-gate
+    chmod 600 /data/adb/lkm/hide-gate
+fi
+
 # Last: every rule above is logged to dmesg as it is added, which is its own
 # trace. Comment out while debugging.
 "$SUSFS" enable_log 0 >/dev/null 2>&1 && echo "hook: kernel logging off"
