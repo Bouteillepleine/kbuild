@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Kernel Module Autoloader</title>
+<style>
+/* MIUIX design language: flat surfaces, 16dp cards, SmallTitle section labels,
+   preference rows, primary #3482FF. Tokens follow miuix lightColorScheme/darkColorScheme. */
+:root{
+  color-scheme:light dark;
+  --surface:#F7F7F7;          /* page */
+  --card:#FFFFFF;             /* surfaceContainer */
+  --text:#000000;
+  --summary:rgba(0,0,0,.6);   /* onSurfaceVariantSummary */
+  --actions:rgba(0,0,0,.4);   /* onSurfaceVariantActions */
+  --primary:#3482FF;
+  --on-primary:#FFFFFF;
+  --primary-off:#C2D9FF;
+  --on-primary-off:#FFFFFF;
+  --secondary:#F0F0F0;        /* secondaryContainer */
+  --info-bg:#EAF2FF;          /* tertiaryContainer */
+  --info-fg:#3482FF;
+  --ok:#1FA361;
+  --warn-bg:#FFF4E0;--warn-fg:#B26A00;
+  --bad-bg:#FDEDEA;--bad-fg:#E94634;
+  --error:#E94634;
+  --press:rgba(0,0,0,.06);
+  --code:#F7F7F7;
+  --radius:16px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --surface:#000000;--card:#242424;--text:#F2F2F2;
+  --summary:rgba(255,255,255,.5);--actions:rgba(255,255,255,.4);
+  --primary:#277AF7;--primary-off:#253E64;--on-primary-off:#677893;
+  --secondary:#434343;--info-bg:#2B3B54;--info-fg:#4788FF;
+  --ok:#3DDC84;--warn-bg:#3A2E15;--warn-fg:#FFB84D;--bad-bg:#2E0603;--bad-fg:#FF8A80;
+  --error:#F12522;--press:rgba(255,255,255,.08);--code:#161616;
+}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{background:var(--surface)}
+body{margin:0;min-height:100vh;background:var(--surface);color:var(--text);
+  font:16px/1.4 "MiSans","Mi Sans","Mi Sans VF",Inter,Roboto,system-ui,sans-serif;
+  padding:0 12px calc(32px + env(safe-area-inset-bottom));-webkit-font-smoothing:antialiased}
+main{max-width:640px;margin:0 auto}
+
+/* Collapsing large title */
+.bar{position:sticky;top:0;z-index:5;height:calc(52px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);
+  margin:0 -12px;display:flex;align-items:center;justify-content:center;background:var(--surface)}
+.bar span{font-size:18px;font-weight:600;opacity:0}
+.large{padding:8px 16px 16px;margin-top:-4px}
+.large h1{margin:0;font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-.3px}
+
+/* SmallTitle */
+.small-title{display:flex;align-items:center;justify-content:space-between;margin:18px 0 8px;padding:0 16px;
+  font-size:14px;font-weight:500;color:var(--summary)}
+.link-btn{background:none;border:0;padding:4px 0 4px 12px;font:inherit;font-size:14px;font-weight:600;color:var(--primary);cursor:pointer}
+.link-btn:active{opacity:.5}
+
+/* Card + preference rows */
+.card{background:var(--card);border-radius:var(--radius);overflow:hidden}
+.item{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;min-height:56px}
+.item .body{min-width:0;flex:1}
+.title{font-size:16px;font-weight:500}
+.sum{font-size:14px;color:var(--summary);margin-top:2px;word-break:break-word}
+.sum.mono{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+.end{font-size:15px;color:var(--summary);text-align:right;flex:none}
+.end.ok{color:var(--ok)}.end.warn{color:var(--warn-fg)}.end.bad,.sum.bad{color:var(--bad-fg)}
+a.item,label.item{cursor:pointer;color:inherit;text-decoration:none}
+a.item:active,label.item:active{background:var(--press)}
+.chev{flex:none;width:8px;height:14px;color:var(--actions)}
+input[type=file]{display:none}
+
+/* Notes inside cards (miuix banner style) */
+.note{margin:0 16px 14px;font-size:13px;line-height:1.45;color:var(--summary);word-break:break-word}
+.note.ok{padding:10px 12px;border-radius:12px;background:var(--info-bg);color:var(--info-fg)}
+.note.warn{padding:10px 12px;border-radius:12px;background:var(--warn-bg);color:var(--warn-fg)}
+.note.bad{padding:10px 12px;border-radius:12px;background:var(--bad-bg);color:var(--bad-fg)}
+.note .mono{display:block;margin-top:4px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.9}
+.progress{height:4px;margin:0 16px;border-radius:2px;background:var(--secondary);overflow:hidden}
+.fill{height:100%;width:0;background:var(--primary);border-radius:2px;transition:width .15s}
+.transfer{margin:8px 16px 14px;font-size:13px;color:var(--summary);word-break:break-word;min-height:1em}
+
+/* Boot protection banner */
+.banner{margin:4px 0 0;padding:14px 16px;border-radius:var(--radius);background:var(--warn-bg);color:var(--warn-fg)}
+.banner b{display:block;font-size:15px;font-weight:600}
+.banner p{margin:6px 0 10px;font-size:13px;line-height:1.45}
+
+/* Buttons: 16dp radius, 48px tall, full width */
+.actions{display:flex;flex-direction:column;gap:12px;margin:18px 0 0}
+.btn{appearance:none;border:0;border-radius:var(--radius);min-height:48px;padding:0 20px;font:inherit;font-size:16px;font-weight:600;
+  background:var(--secondary);color:var(--text);cursor:pointer;transition:filter .12s}
+.btn:active{filter:brightness(.92)}
+.btn.primary{background:var(--primary);color:var(--on-primary)}
+.btn.danger{color:var(--error)}
+.btn:disabled{cursor:not-allowed;background:var(--primary-off);color:var(--on-primary-off);filter:none}
+.btn.secondary:disabled,.btn.danger:disabled{background:var(--secondary);color:var(--actions)}
+.btn.sm{min-height:34px;padding:0 14px;font-size:14px;border-radius:12px;background:var(--secondary)}
+
+pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  background:var(--code);border-radius:12px;color:var(--summary);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<main>
+<div class="bar"><span id="barTitle">Kernel Module Autoloader</span></div>
+<div class="large" id="large"><h1>Kernel Module<br>Autoloader</h1></div>
+
+<div id="warning" class="banner" style="display:none"><b>Boot protection triggered</b><p id="warningText"></p><button class="btn sm" id="clearWarning">Dismiss</button></div>
+
+<div class="small-title">Device</div>
+<section class="card">
+  <div class="item"><div class="body"><div class="title">Kernel release</div><div class="sum mono" id="kernel">Checking…</div></div></div>
+  <div class="item"><div class="body"><div class="title">Kernel build</div><div class="sum mono" id="kbuild">Checking…</div></div></div>
+  <div class="item"><div class="title">Architecture</div><div class="end" id="arch">Checking…</div></div>
+  <div class="item"><div class="title">Persistent module</div><div class="end" id="persistent">Checking…</div></div>
+</section>
+
+<div class="small-title">Module</div>
+<section class="card">
+  <label class="item" for="ko">
+    <div class="body"><div class="title" id="filename">Choose a .ko file</div><div class="sum" id="filemeta">From your device storage</div></div>
+    <svg class="chev" viewBox="0 0 8 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l6 6-6 6"/></svg>
+  </label>
+  <input id="ko" type="file" accept=".ko,application/octet-stream">
+  <div class="note" id="compat">Build compatibility is shown after you pick a file. It is informational only and never blocks loading.</div>
+  <div class="progress"><div class="fill" id="bar"></div></div>
+  <div class="transfer" id="transfer"></div>
+</section>
+<div class="actions">
+  <button class="btn primary" id="load" disabled>Load once</button>
+  <button class="btn secondary" id="boot" disabled>Save &amp; load at every boot</button>
+  <button class="btn danger" id="remove">Remove saved module</button>
+</div>
+
+<div class="small-title">Loaded modules<button class="link-btn" id="refreshModules">Refresh</button></div>
+<section class="card"><pre id="modules" style="margin-top:12px">Loading…</pre></section>
+
+<div class="small-title">Loader log<button class="link-btn" id="refreshLog">Refresh</button></div>
+<section class="card"><pre id="log" style="margin-top:12px">Loading…</pre></section>
+
+<div class="small-title">Kernel log<button class="link-btn" id="refreshKlog">Refresh</button></div>
+<section class="card"><pre id="klog" style="margin-top:12px">Loading…</pre></section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const bridge = window.ksu;
+
+const ROOT = '/data/adb/lkm';
+const paths = {
+  selected: ROOT + '/webui-selected.ko',
+  persistent: ROOT + '/persistent.ko',
+  flag: ROOT + '/persistent.enabled',
+  pending: ROOT + '/persistent.boot_pending',
+  warning: ROOT + '/persistent.warning',
+  log: ROOT + '/log'
+};
+// 48 KiB per transfer chunk. Multiple of 3 so every base64 chunk is unpadded.
+const CHUNK = 49152;
+const HINT = 'Build compatibility is shown after you pick a file. It is informational only and never blocks loading.';
+
+let selected = null;
+let selectedReady = false;
+let kernelRelease = '';
+let seq = 0;
+
+const esc = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const quote = s => "'" + String(s).replaceAll("'", "'\\''") + "'";
+const toast = m => { try { bridge.toast(String(m)); } catch (e) {} };
+const setBusy = b => { $('load').disabled = b || !selectedReady; $('boot').disabled = b || !selectedReady; };
+const setEnd = (el, text, type = '') => { el.className = 'end ' + type; el.textContent = text; };
+const note = (cls, html) => { $('compat').className = 'note ' + cls; $('compat').innerHTML = html; };
+
+// Collapsing large title (miuix TopAppBar behaviour)
+const onScroll = () => {
+  const p = Math.min(1, Math.max(0, (scrollY - 16) / 48));
+  $('barTitle').style.opacity = p;
+  $('large').style.opacity = 1 - p;
+};
+addEventListener('scroll', onScroll, { passive: true });
+
+// Runs a root shell command through the KernelSU WebUI bridge.
+// Uses the async callback form of ksu.exec (what the official `kernelsu`
+// library uses), which reports a real exit code and stderr. Falls back to the
+// old synchronous form only if the bridge does not offer the async one.
+function run(cmd) {
+  return new Promise(resolve => {
+    if (!bridge || typeof bridge.exec !== 'function') {
+      return resolve({ errno: 127, stdout: '', stderr: 'KernelSU WebUI bridge unavailable' });
+    }
+    const name = 'ukma_cb_' + Date.now() + '_' + (seq++);
+    let timer;
+    const done = r => { clearTimeout(timer); delete window[name]; resolve(r); };
+    timer = setTimeout(() => done({ errno: 124, stdout: '', stderr: 'Command timed out' }), 120000);
+    window[name] = (errno, stdout, stderr) =>
+      done({ errno: Number(errno), stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+    try {
+      bridge.exec(cmd, JSON.stringify({}), name);
+    } catch (e) {
+      // Async overload missing: use the synchronous one (stdout only).
+      delete window[name];
+      clearTimeout(timer);
+      try {
+        const marker = '__UKMA_RC__';
+        const out = String(bridge.exec('(' + cmd + ') 2>&1; printf \'\\n' + marker + '%s\' "$?"'));
+        const pos = out.lastIndexOf(marker);
+        const rc = pos < 0 ? 0 : parseInt(out.slice(pos + marker.length), 10);
+        resolve({ errno: Number.isFinite(rc) ? rc : 0, stdout: pos < 0 ? out : out.slice(0, pos).replace(/\n$/, ''), stderr: '' });
+      } catch (e2) {
+        resolve({ errno: 1, stdout: '', stderr: String(e2) });
+      }
+    }
+  });
+}
+const sh = async cmd => (await run(cmd)).stdout.trim();
+
+async function refreshDevice() {
+  const r = await run(
+    'R=$(uname -r 2>/dev/null || cat /proc/sys/kernel/osrelease); ' +
+    'M=$(uname -m 2>/dev/null || getprop ro.product.cpu.abi); ' +
+    'V=$(uname -v 2>/dev/null || cat /proc/sys/kernel/version); ' +
+    "printf '%s\\n%s\\n%s\\n' \"$R\" \"$M\" \"$V\"");
+  const [rel = '', arch = '', build = ''] = r.stdout.split('\n').map(s => s.trim());
+  kernelRelease = rel;
+  const why = (r.stderr || r.stdout || 'no output').trim();
+  $('kernel').textContent = rel || 'Unavailable (' + why + ')';
+  $('kernel').classList.toggle('bad', !rel);
+  $('kbuild').textContent = build || 'Unavailable';
+  $('arch').textContent = arch || 'Unavailable';
+
+  const p = await sh(`if [ -s ${paths.persistent} ] && [ -f ${paths.flag} ]; then echo enabled; elif [ -s ${paths.persistent} ]; then echo saved; else echo none; fi`);
+  setEnd($('persistent'), p === 'enabled' ? 'Enabled' : p === 'saved' ? 'Saved (disabled)' : 'Not configured',
+         p === 'enabled' ? 'ok' : p === 'saved' ? 'warn' : '');
+}
+async function refreshModules() { $('modules').textContent = await sh('cat /proc/modules 2>&1') || 'No modules loaded.'; }
+async function refreshLog() { $('log').textContent = await sh(`tail -n 120 ${paths.log} 2>/dev/null`) || 'No loader log yet.'; }
+async function refreshKlog() {
+  let t = await sh('dmesg 2>/dev/null | tail -n 120');
+  if (!t) t = await sh('logcat -b kernel -d -t 120 2>/dev/null');
+  $('klog').textContent = t || 'Kernel log unavailable.';
+}
+async function refreshWarning() {
+  const w = await sh(`cat ${paths.warning} 2>/dev/null`);
+  $('warning').style.display = w ? 'block' : 'none';
+  $('warningText').textContent = w;
+}
+const refreshAll = () => Promise.all([refreshDevice(), refreshModules(), refreshLog(), refreshKlog(), refreshWarning()]);
+
+function toBase64(u8) {
+  let bin = '';
+  for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+async function sha256(u8) {
+  try { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', u8))].map(b => b.toString(16).padStart(2, '0')).join(''); }
+  catch (e) { return ''; }
+}
+function vermagicOf(u8) {
+  const s = new TextDecoder('latin1').decode(u8);
+  const i = s.indexOf('vermagic=');
+  if (i < 0) return '';
+  const end = s.indexOf('\0', i);
+  return s.slice(i + 9, end < 0 ? i + 200 : end).trim();
+}
+
+// Copies `bytes` to `target` on the device. Each chunk is written at a fixed
+// offset (dd seek), so a failed chunk can simply be retried, then size and
+// SHA-256 are verified against the original.
+async function writeFile(bytes, target) {
+  const t = quote(target);
+  const hasBB = (await run('[ -x /data/adb/ksu/bin/busybox ]')).errno === 0;
+  const decode = hasBB ? '/data/adb/ksu/bin/busybox base64 -d' : 'base64 -d';
+  const init = await run(`mkdir -p ${ROOT} && chmod 700 ${ROOT} && rm -f ${t} && : > ${t} && chmod 600 ${t}`);
+  if (init.errno) throw new Error('Cannot create ' + target + ': ' + (init.stdout || init.stderr));
+
+  for (let off = 0, idx = 0; off < bytes.length; off += CHUNK, idx++) {
+    const b64 = toBase64(bytes.subarray(off, off + CHUNK));
+    let r;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      r = await run(`printf %s '${b64}' | ${decode} | dd of=${t} bs=${CHUNK} seek=${idx} conv=notrunc 2>&1 >/dev/null`);
+      if (r.errno === 0) break;
+    }
+    if (r.errno) throw new Error('Write failed at byte ' + off + ': ' + (r.stderr || r.stdout || 'exit ' + r.errno));
+    const done = Math.min(off + CHUNK, bytes.length);
+    $('bar').style.width = Math.round(done * 100 / bytes.length) + '%';
+    $('transfer').textContent = 'Transferring… ' + done.toLocaleString() + ' / ' + bytes.length.toLocaleString() + ' bytes';
+  }
+
+  const size = Number(await sh(`wc -c < ${t}`));
+  if (size !== bytes.length) throw new Error('Size mismatch: expected ' + bytes.length + ' bytes, device has ' + (Number.isFinite(size) ? size : 'unreadable') + '.');
+  const want = await sha256(bytes);
+  if (want) {
+    const got = (await sh(`sha256sum ${t} 2>/dev/null`)).split(/\s+/)[0];
+    if (got && got !== want) throw new Error('Checksum mismatch after transfer.');
+  }
+}
+
+async function stage(file) {
+  selectedReady = false; setBusy(true);
+  if (!file || !/\.ko$/i.test(file.name) || file.size <= 4096) {
+    note('bad', 'Not a valid kernel module file.'); return;
+  }
+  note('', 'Preparing module…');
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const vm = vermagicOf(bytes);
+    await writeFile(bytes, paths.selected);
+    selectedReady = true;
+    $('transfer').textContent = 'Module staged and verified.';
+    if (!vm) note('warn', 'No vermagic found in this file.');
+    else if (kernelRelease && vm.split(' ')[0] === kernelRelease) note('ok', 'Built for this kernel<span class="mono">' + esc(vm) + '</span>');
+    else note('warn', 'vermagic differs from the running kernel, so loading may fail<span class="mono">' + esc(vm) + '</span>');
+  } catch (e) {
+    note('bad', 'Module transfer failed: ' + esc(e.message || e));
+    await run('rm -f ' + quote(paths.selected));
+  } finally { setBusy(false); }
+}
+
+async function loadSelected(persistent) {
+  if (!selected || !selectedReady) return;
+  setBusy(true);
+  try {
+    if (persistent) {
+      const cp = await run(`cp -f ${quote(paths.selected)} ${quote(paths.persistent)} && chmod 600 ${quote(paths.persistent)} && rm -f ${quote(paths.pending)} ${quote(paths.warning)} && touch ${quote(paths.flag)}`);
+      if (cp.errno) throw new Error(cp.stdout || cp.stderr || 'Could not save persistent module');
+    }
+    const target = persistent ? paths.persistent : paths.selected;
+    const r = await run('KSUD=/data/adb/ksu/bin/ksud; [ -x "$KSUD" ] || KSUD=$(command -v ksud); "$KSUD" insmod ' + quote(target) + ' 2>&1');
+    if (r.errno) {
+      if (persistent) await run(`rm -f ${quote(paths.flag)} ${quote(paths.persistent)}`);
+      $('transfer').textContent = 'insmod failed: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno) + ' (see Kernel log below)';
+      toast('Module load failed');
+    } else {
+      await run('rm -f ' + quote(paths.selected));
+      selectedReady = false;
+      $('transfer').textContent = persistent ? 'Saved and loaded. Boot protection is armed.' : 'Module loaded.';
+      toast(persistent ? 'Module saved for every boot' : 'Module loaded');
+    }
+  } catch (e) {
+    $('transfer').textContent = String(e.message || e);
+  } finally { setBusy(false); }
+  refreshAll();
+}
+
+$('ko').addEventListener('change', async e => {
+  selected = e.target.files?.[0] || null;
+  selectedReady = false;
+  $('bar').style.width = '0%';
+  $('transfer').textContent = '';
+  if (!selected) {
+    $('filename').textContent = 'Choose a .ko file';
+    $('filemeta').textContent = 'From your device storage';
+    note('', HINT);
+    setBusy(true); return;
+  }
+  $('filename').textContent = selected.name;
+  $('filemeta').textContent = (selected.size / 1048576).toFixed(2) + ' MiB';
+  await stage(selected);
+  e.target.value = ''; // allow picking the same file again
+});
+$('load').addEventListener('click', () => loadSelected(false));
+$('boot').addEventListener('click', () => loadSelected(true));
+$('clearWarning').addEventListener('click', async () => { await run('rm -f ' + quote(paths.warning)); refreshWarning(); });
+$('remove').addEventListener('click', async () => {
+  await run(`rm -f ${quote(paths.persistent)} ${quote(paths.flag)} ${quote(paths.selected)} ${quote(paths.pending)} ${quote(paths.warning)}`);
+  selectedReady = false; setBusy(true);
+  $('transfer').textContent = 'Saved module removed. A module already loaded in the kernel is not unloaded.';
+  refreshAll();
+});
+$('refreshModules').addEventListener('click', refreshModules);
+$('refreshLog').addEventListener('click', refreshLog);
+$('refreshKlog').addEventListener('click', refreshKlog);
+
+setBusy(true);
+if (!bridge) {
+  $('transfer').textContent = 'KernelSU WebUI bridge is unavailable. Open this page from the KernelSU manager.';
+  $('kernel').textContent = $('kbuild').textContent = $('arch').textContent = 'Unavailable';
+  $('kernel').classList.add('bad');
+  document.querySelectorAll('button').forEach(b => b.disabled = true);
+} else refreshAll();
+</script>
+</body>
+</html>
