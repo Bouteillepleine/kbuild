@@ -7,6 +7,11 @@ PERSIST="$ROOT/persistent.ko"
 FLAG="$ROOT/persistent.enabled"
 PENDING="$ROOT/persistent.boot_pending"
 WARNING="$ROOT/persistent.warning"
+# Optional user script, run ONLY after the module is really in the kernel.  This is the
+# only correctly-ordered place for a module's own configuration: a control ABI that the
+# .ko itself provides (a SUSFS supercall, a netlink socket, a /proc node) does not exist
+# until insmod returns, and ksud's own init has already run by then.
+HOOK="$ROOT/post-insmod.sh"
 LOG="$ROOT/log"
 
 MODDIR=${0%/*}
@@ -20,6 +25,7 @@ chmod 700 "$ROOT"
     echo "Universal Kernel Module Autoloader"
     echo "Kernel: $(uname -r)"
 } > "$LOG"
+chmod 600 "$LOG"
 
 KSUD="/data/adb/ksu/bin/ksud"
 [ -x "$KSUD" ] || KSUD="$(command -v ksud)"
@@ -57,7 +63,16 @@ echo "Exit code: $RESULT" >> "$LOG"
 # The module NAME, for the WebUI's live controls (rmmod takes a name, not a path).
 # Read out of the .ko's .modinfo; harmless if the tools are missing.
 NAME="$(strings "$PERSIST" 2>/dev/null | sed -n 's/^name=\([A-Za-z0-9_-]\{1,\}\)$/\1/p' | head -1)"
-[ -n "$NAME" ] && printf '%s\n' "$NAME" > "$ROOT/loaded.name"
+if [ -n "$NAME" ]; then
+    printf '%s\n' "$NAME" > "$ROOT/loaded.name"
+    chmod 600 "$ROOT/loaded.name"
+fi
+
+if [ "$RESULT" -eq 0 ] && [ -s "$HOOK" ]; then
+    echo "--- post-insmod hook ---" >> "$LOG"
+    sh "$HOOK" >> "$LOG" 2>&1
+    echo "hook exit: $?" >> "$LOG"
+fi
 
 if [ "$RESULT" -ne 0 ]; then
     rm -f "$FLAG" "$PENDING" "$ROOT/loaded.name"

@@ -137,6 +137,7 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
 <div class="small-title">Live control<button class="link-btn" id="refreshLive">Refresh</button></div>
 <section class="card">
   <div class="item"><div class="body"><div class="title">Module</div><div class="sum mono" id="liveName">—</div></div><div class="end" id="liveState">—</div></div>
+  <div class="item"><div class="body"><div class="title">Post-load hook</div><div class="sum mono">/data/adb/lkm/post-insmod.sh</div></div><div class="end" id="hookState">—</div></div>
   <div class="note" id="liveNote">Unload and reload take effect immediately — no reboot. A module that filters itself out of <span class="mono">/proc/modules</span> is still detected here, via <span class="mono">/sys/module</span>.</div>
 </section>
 <div class="actions">
@@ -278,6 +279,10 @@ async function refreshLive() {
   const cand = (selectedName || recorded || '').trim();
   liveName = /^[A-Za-z0-9_-]+$/.test(cand) ? cand : '';
   liveLoaded = liveName ? (await run(`[ -d /sys/module/${quote(liveName)} ]`)).errno === 0 : false;
+  // A module that provides its own control ABI can only be configured after it loads,
+  // which is what the hook is for; say whether one is in place.
+  const hook = (await run(`[ -s ${quote(ROOT + '/post-insmod.sh')} ]`)).errno === 0;
+  setEnd($('hookState'), hook ? 'Present' : 'None', hook ? 'ok' : '');
   $('liveName').textContent = liveName || '\u2014';
   setEnd($('liveState'), !liveName ? '\u2014' : liveLoaded ? 'In kernel' : 'Not loaded',
          !liveName ? '' : liveLoaded ? 'ok' : 'warn');
