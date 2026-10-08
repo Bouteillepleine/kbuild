@@ -114,7 +114,7 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <div class="item"><div class="body"><div class="title">Kernel release</div><div class="sum mono" id="kernel">Checking…</div></div></div>
   <div class="item"><div class="body"><div class="title">Kernel build</div><div class="sum mono" id="kbuild">Checking…</div></div></div>
   <div class="item"><div class="title">Architecture</div><div class="end" id="arch">Checking…</div></div>
-  <div class="item"><div class="title">Persistent module</div><div class="end" id="persistent">Checking…</div></div>
+  <div class="item"><div class="body"><div class="title">Persistent module</div><div class="sum mono" id="persistentName"></div></div><div class="end" id="persistent">Checking…</div></div>
 </section>
 
 <div class="small-title">Module</div>
@@ -132,6 +132,16 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <button class="btn primary" id="load" disabled>Load once</button>
   <button class="btn secondary" id="boot" disabled>Save &amp; load at every boot</button>
   <button class="btn danger" id="remove">Remove saved module</button>
+</div>
+
+<div class="small-title">Live control<button class="link-btn" id="refreshLive">Refresh</button></div>
+<section class="card">
+  <div class="item"><div class="body"><div class="title">Module</div><div class="sum mono" id="liveName">—</div></div><div class="end" id="liveState">—</div></div>
+  <div class="note" id="liveNote">Unload and reload take effect immediately — no reboot. A module that filters itself out of <span class="mono">/proc/modules</span> is still detected here, via <span class="mono">/sys/module</span>.</div>
+</section>
+<div class="actions">
+  <button class="btn secondary" id="reload" disabled>Reload (unload, then load)</button>
+  <button class="btn danger" id="unload" disabled>Unload now</button>
 </div>
 
 <div class="small-title">Loaded modules<button class="link-btn" id="refreshModules">Refresh</button></div>
@@ -155,7 +165,12 @@ const paths = {
   flag: ROOT + '/persistent.enabled',
   pending: ROOT + '/persistent.boot_pending',
   warning: ROOT + '/persistent.warning',
-  log: ROOT + '/log'
+  log: ROOT + '/log',
+  // Module NAME of what is saved / what was last inserted.  rmmod takes a name, not a
+  // path, and a module that filters itself out of /proc/modules cannot be enumerated -
+  // so the name has to be remembered rather than discovered.
+  pname: ROOT + '/persistent.name',
+  lname: ROOT + '/loaded.name'
 };
 // 48 KiB per transfer chunk. Multiple of 3 so every base64 chunk is unpadded.
 const CHUNK = 49152;
@@ -163,13 +178,30 @@ const HINT = 'Build compatibility is shown after you pick a file. It is informat
 
 let selected = null;
 let selectedReady = false;
+let selectedName = '';
+let liveName = '';
 let kernelRelease = '';
 let seq = 0;
 
 const esc = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const quote = s => "'" + String(s).replaceAll("'", "'\\''") + "'";
 const toast = m => { try { bridge.toast(String(m)); } catch (e) {} };
-const setBusy = b => { $('load').disabled = b || !selectedReady; $('boot').disabled = b || !selectedReady; };
+let busy = false;
+const setBusy = b => {
+  busy = b;
+  $('load').disabled = b || !selectedReady;
+  $('boot').disabled = b || !selectedReady;
+  // These were clickable mid-transfer before, which let a Remove race a write.
+  $('remove').disabled = b;
+  refreshLiveButtons();
+};
+// Enabled only when the module is actually in the kernel right now.
+let liveLoaded = false;
+const refreshLiveButtons = () => {
+  const can = !busy && !!liveName && liveLoaded;
+  $('unload').disabled = !can;
+  $('reload').disabled = busy || !liveName || !(liveLoaded || selectedReady);
+};
 const setEnd = (el, text, type = '') => { el.className = 'end ' + type; el.textContent = text; };
 const note = (cls, html) => { $('compat').className = 'note ' + cls; $('compat').innerHTML = html; };
 
@@ -233,8 +265,24 @@ async function refreshDevice() {
   const p = await sh(`if [ -s ${paths.persistent} ] && [ -f ${paths.flag} ]; then echo enabled; elif [ -s ${paths.persistent} ]; then echo saved; else echo none; fi`);
   setEnd($('persistent'), p === 'enabled' ? 'Enabled' : p === 'saved' ? 'Saved (disabled)' : 'Not configured',
          p === 'enabled' ? 'ok' : p === 'saved' ? 'warn' : '');
+  // "Enabled" alone does not say WHICH module is armed for boot.
+  const saved = await sh(`cat ${quote(paths.pname)} 2>/dev/null`);
+  $('persistentName').textContent = p === 'none' ? '' : (saved || '(name unknown)');
 }
 async function refreshModules() { $('modules').textContent = await sh('cat /proc/modules 2>&1') || 'No modules loaded.'; }
+
+// Which module this tool is responsible for, and whether it is in the kernel.
+// Priority: the file just staged, else the recorded last-loaded name, else the saved one.
+async function refreshLive() {
+  const recorded = await sh(`cat ${quote(paths.lname)} 2>/dev/null || cat ${quote(paths.pname)} 2>/dev/null`);
+  const cand = (selectedName || recorded || '').trim();
+  liveName = /^[A-Za-z0-9_-]+$/.test(cand) ? cand : '';
+  liveLoaded = liveName ? (await run(`[ -d /sys/module/${quote(liveName)} ]`)).errno === 0 : false;
+  $('liveName').textContent = liveName || '\u2014';
+  setEnd($('liveState'), !liveName ? '\u2014' : liveLoaded ? 'In kernel' : 'Not loaded',
+         !liveName ? '' : liveLoaded ? 'ok' : 'warn');
+  refreshLiveButtons();
+}
 async function refreshLog() { $('log').textContent = await sh(`tail -n 120 ${paths.log} 2>/dev/null`) || 'No loader log yet.'; }
 async function refreshKlog() {
   let t = await sh('dmesg 2>/dev/null | tail -n 120');
@@ -246,7 +294,10 @@ async function refreshWarning() {
   $('warning').style.display = w ? 'block' : 'none';
   $('warningText').textContent = w;
 }
-const refreshAll = () => Promise.all([refreshDevice(), refreshModules(), refreshLog(), refreshKlog(), refreshWarning()]);
+// The manager card shows module.prop's description, and desc.sh rewrites it from the
+// live state - so a load/unload done here is reflected on the card without a reboot.
+const refreshCard = () => run('sh /data/adb/modules/susfs_lkm_loader/desc.sh >/dev/null 2>&1');
+const refreshAll = () => Promise.all([refreshDevice(), refreshModules(), refreshLog(), refreshKlog(), refreshWarning(), refreshLive(), refreshCard()]);
 
 function toBase64(u8) {
   let bin = '';
@@ -257,13 +308,22 @@ async function sha256(u8) {
   try { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', u8))].map(b => b.toString(16).padStart(2, '0')).join(''); }
   catch (e) { return ''; }
 }
-function vermagicOf(u8) {
+// One .modinfo entry.  Anchored on the NUL that precedes the record, because the
+// entries are NUL-separated key=value pairs and an unanchored search for "name=" also
+// matches "filename=", which is a different field with a different value.
+function modinfoOf(u8, key) {
   const s = new TextDecoder('latin1').decode(u8);
-  const i = s.indexOf('vermagic=');
-  if (i < 0) return '';
+  const needle = key + '=';
+  let i = s.indexOf('\0' + needle);
+  if (i >= 0) i += 1;
+  else if (s.startsWith(needle)) i = 0;
+  else return '';
   const end = s.indexOf('\0', i);
-  return s.slice(i + 9, end < 0 ? i + 200 : end).trim();
+  return s.slice(i + needle.length, end < 0 ? i + 256 : end).trim();
 }
+const vermagicOf = u8 => modinfoOf(u8, 'vermagic');
+// Kernel module names are [A-Za-z0-9_-]; anything else is not a name we will hand to rmmod.
+const nameOf = u8 => { const n = modinfoOf(u8, 'name'); return /^[A-Za-z0-9_-]+$/.test(n) ? n : ''; };
 
 // Copies `bytes` to `target` on the device. Each chunk is written at a fixed
 // offset (dd seek), so a failed chunk can simply be retried, then size and
@@ -272,6 +332,7 @@ async function writeFile(bytes, target) {
   const t = quote(target);
   const hasBB = (await run('[ -x /data/adb/ksu/bin/busybox ]')).errno === 0;
   const decode = hasBB ? '/data/adb/ksu/bin/busybox base64 -d' : 'base64 -d';
+  const ddbin = hasBB ? '/data/adb/ksu/bin/busybox dd' : 'dd';
   const init = await run(`mkdir -p ${ROOT} && chmod 700 ${ROOT} && rm -f ${t} && : > ${t} && chmod 600 ${t}`);
   if (init.errno) throw new Error('Cannot create ' + target + ': ' + (init.stdout || init.stderr));
 
@@ -279,7 +340,11 @@ async function writeFile(bytes, target) {
     const b64 = toBase64(bytes.subarray(off, off + CHUNK));
     let r;
     for (let attempt = 0; attempt < 3; attempt++) {
-      r = await run(`printf %s '${b64}' | ${decode} | dd of=${t} bs=${CHUNK} seek=${idx} conv=notrunc 2>&1 >/dev/null`);
+      // iflag=fullblock is not optional: dd reading from a PIPE does short reads, and
+      // without it a chunk can be written truncated while dd still exits 0 - so the
+      // retry loop (which only retries a non-zero exit) never fires and the transfer
+      // fails the final checksum instead, with no way to recover.
+      r = await run(`printf %s '${b64}' | ${decode} | ${ddbin} iflag=fullblock of=${t} bs=${CHUNK} seek=${idx} conv=notrunc 2>&1 >/dev/null`);
       if (r.errno === 0) break;
     }
     if (r.errno) throw new Error('Write failed at byte ' + off + ': ' + (r.stderr || r.stdout || 'exit ' + r.errno));
@@ -306,6 +371,7 @@ async function stage(file) {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const vm = vermagicOf(bytes);
+    selectedName = nameOf(bytes);
     await writeFile(bytes, paths.selected);
     selectedReady = true;
     $('transfer').textContent = 'Module staged and verified.';
@@ -323,7 +389,7 @@ async function loadSelected(persistent) {
   setBusy(true);
   try {
     if (persistent) {
-      const cp = await run(`cp -f ${quote(paths.selected)} ${quote(paths.persistent)} && chmod 600 ${quote(paths.persistent)} && rm -f ${quote(paths.pending)} ${quote(paths.warning)} && touch ${quote(paths.flag)}`);
+      const cp = await run(`cp -f ${quote(paths.selected)} ${quote(paths.persistent)} && chmod 600 ${quote(paths.persistent)} && rm -f ${quote(paths.pending)} ${quote(paths.warning)} && touch ${quote(paths.flag)} && sync`);
       if (cp.errno) throw new Error(cp.stdout || cp.stderr || 'Could not save persistent module');
     }
     const target = persistent ? paths.persistent : paths.selected;
@@ -333,6 +399,10 @@ async function loadSelected(persistent) {
       $('transfer').textContent = 'insmod failed: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno) + ' (see Kernel log below)';
       toast('Module load failed');
     } else {
+      if (selectedName) {
+        await run(`printf '%s\\n' ${quote(selectedName)} > ${quote(paths.lname)}` +
+                  (persistent ? ` && printf '%s\\n' ${quote(selectedName)} > ${quote(paths.pname)}` : '') + ' && sync');
+      }
       await run('rm -f ' + quote(paths.selected));
       selectedReady = false;
       $('transfer').textContent = persistent ? 'Saved and loaded. Boot protection is armed.' : 'Module loaded.';
@@ -344,11 +414,59 @@ async function loadSelected(persistent) {
   refreshAll();
 }
 
+// rmmod by name.  toybox provides rmmod; busybox is the fallback.
+async function doUnload() {
+  const r = await run(`rmmod ${quote(liveName)} 2>&1 || /data/adb/ksu/bin/busybox rmmod ${quote(liveName)} 2>&1`);
+  if (r.errno === 0) await run(`rm -f ${quote(paths.lname)}`);
+  return r;
+}
+async function doInsmod(target) {
+  return run('KSUD=/data/adb/ksu/bin/ksud; [ -x "$KSUD" ] || KSUD=$(command -v ksud); "$KSUD" insmod ' + quote(target) + ' 2>&1');
+}
+
+$('unload').addEventListener('click', async () => {
+  if (!liveName) return;
+  setBusy(true);
+  const r = await doUnload();
+  $('transfer').textContent = r.errno
+    ? 'Unload failed: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno) + ' (a module in use cannot be removed)'
+    : 'Unloaded ' + liveName + '. The saved copy is untouched.';
+  toast(r.errno ? 'Unload failed' : 'Module unloaded');
+  setBusy(false);
+  refreshAll();
+});
+
+// The iterate-without-reboot path: drop the running copy, insert the staged one if
+// there is one, else the saved one.
+$('reload').addEventListener('click', async () => {
+  setBusy(true);
+  try {
+    if (liveLoaded) {
+      const u = await doUnload();
+      if (u.errno) throw new Error('Unload failed: ' + ((u.stdout || u.stderr).trim() || 'exit ' + u.errno));
+    }
+    const target = selectedReady ? paths.selected : paths.persistent;
+    if ((await run(`[ -s ${quote(target)} ]`)).errno) throw new Error('Nothing to load: no staged file and no saved module.');
+    const r = await doInsmod(target);
+    if (r.errno) throw new Error('insmod failed: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno));
+    if (selectedName) await run(`printf '%s\\n' ${quote(selectedName)} > ${quote(paths.lname)} && sync`);
+    $('transfer').textContent = 'Reloaded from ' + (selectedReady ? 'the staged file' : 'the saved module') + '.';
+    toast('Module reloaded');
+  } catch (e) {
+    $('transfer').textContent = String(e.message || e);
+    toast('Reload failed');
+  }
+  setBusy(false);
+  refreshAll();
+});
+$('refreshLive').addEventListener('click', refreshLive);
+
 $('ko').addEventListener('change', async e => {
   selected = e.target.files?.[0] || null;
   selectedReady = false;
   $('bar').style.width = '0%';
   $('transfer').textContent = '';
+  selectedName = '';
   if (!selected) {
     $('filename').textContent = 'Choose a .ko file';
     $('filemeta').textContent = 'From your device storage';
@@ -364,7 +482,7 @@ $('load').addEventListener('click', () => loadSelected(false));
 $('boot').addEventListener('click', () => loadSelected(true));
 $('clearWarning').addEventListener('click', async () => { await run('rm -f ' + quote(paths.warning)); refreshWarning(); });
 $('remove').addEventListener('click', async () => {
-  await run(`rm -f ${quote(paths.persistent)} ${quote(paths.flag)} ${quote(paths.selected)} ${quote(paths.pending)} ${quote(paths.warning)}`);
+  await run(`rm -f ${quote(paths.persistent)} ${quote(paths.flag)} ${quote(paths.selected)} ${quote(paths.pending)} ${quote(paths.warning)} ${quote(paths.pname)} && sync`);
   selectedReady = false; setBusy(true);
   $('transfer').textContent = 'Saved module removed. A module already loaded in the kernel is not unloaded.';
   refreshAll();
