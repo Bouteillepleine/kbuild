@@ -143,6 +143,7 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
 <div class="actions">
   <button class="btn secondary" id="reload" disabled>Reload (unload, then load)</button>
   <button class="btn danger" id="unload" disabled>Unload now</button>
+  <button class="btn secondary" id="hookBtn">Install SUSFS hook</button>
 </div>
 
 <div class="small-title">Loaded modules<button class="link-btn" id="refreshModules">Refresh</button></div>
@@ -283,6 +284,7 @@ async function refreshLive() {
   // which is what the hook is for; say whether one is in place.
   const hook = (await run(`[ -s ${quote(ROOT + '/post-insmod.sh')} ]`)).errno === 0;
   setEnd($('hookState'), hook ? 'Present' : 'None', hook ? 'ok' : '');
+  $('hookBtn').textContent = hook ? 'Remove SUSFS hook' : 'Install SUSFS hook';
   $('liveName').textContent = liveName || '\u2014';
   setEnd($('liveState'), !liveName ? '\u2014' : liveLoaded ? 'In kernel' : 'Not loaded',
          !liveName ? '' : liveLoaded ? 'ok' : 'warn');
@@ -460,6 +462,25 @@ $('reload').addEventListener('click', async () => {
   } catch (e) {
     $('transfer').textContent = String(e.message || e);
     toast('Reload failed');
+  }
+  setBusy(false);
+  refreshAll();
+});
+// One tap to install or remove the bundled SUSFS hook.  It ships INACTIVE: this is a
+// generic .ko loader, so applying someone's susfs rules unasked would be wrong.
+$('hookBtn').addEventListener('click', async () => {
+  setBusy(true);
+  const live = ROOT + '/post-insmod.sh';
+  const src = '/data/adb/modules/susfs_lkm_loader/post-insmod.sh.susfs';
+  const have = (await run(`[ -s ${quote(live)} ]`)).errno === 0;
+  if (have) {
+    await run(`rm -f ${quote(live)} && sync`);
+    $('transfer').textContent = 'Hook removed. Rules already applied stay until reboot.';
+  } else {
+    const r = await run(`[ -f ${quote(src)} ] && cp -f ${quote(src)} ${quote(live)} && chmod 700 ${quote(live)} && sync`);
+    $('transfer').textContent = r.errno
+      ? 'Could not install the hook: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno)
+      : 'Hook installed. Read it before enabling HIDE_DATA_ADB - it can hide /data/adb from the manager too.';
   }
   setBusy(false);
   refreshAll();

@@ -1,0 +1,63 @@
+#!/system/bin/sh
+# SUSFS rules, applied right after susfs_guard_lkm.ko loads.
+# Copy to /data/adb/lkm/post-insmod.sh, chmod 700. Output -> /data/adb/lkm/log.
+#
+# ===========================================================================
+# MEASURED ON DEVICE, 6.12.58 / OP15 -- read before editing
+# ===========================================================================
+# 1. Hiding a CHILD of /data/adb does nothing. An app reaching
+#    /data/adb/<anything> must traverse /data/adb, which is 0700 root:root, and
+#    inode_permission() runs the DAC check BEFORE security_inode_permission().
+#    So the app gets EACCES from the parent and this module's hook is never
+#    called -- the rule is registered, the ENOENT counters stay at zero.
+#    Verified: six such rules applied, counters did not move.
+#
+# 2. The only rule with real effect is /data/adb itself. stat(2) needs no
+#    permission on the target, so an app CAN stat /data/adb and learn it exists
+#    -- that is the actual leak -- and the inode_getattr hook turns exactly that
+#    into ENOENT. Verified: app stat -> "No such file or directory", root
+#    unaffected, counters moved.
+#
+# 3. The cost: upstream SUSFS hides only from apps it has umounted
+#    (TIF_PROC_UMOUNTED && uid >= 10000). This LKM cannot read that flag and
+#    uses "uid >= 10000" alone, so it hides from EVERY app -- the KernelSU
+#    manager included. If the manager reads /data/adb as its own app uid, its
+#    module list breaks. Its WebUI shell runs as root and is unaffected.
+#    THIS IS THE ONE THING TO TEST ON YOUR SETUP. Recovery needs no manager:
+#      adb shell su -c 'echo "del /data/adb" > /proc/susfs_path'
+#    or just reboot with the hook removed.
+# ===========================================================================
+
+# 0 = leave /data/adb visible (manager definitely keeps working, leak stays)
+# 1 = hide it from all apps (closes the leak, may break the manager)
+HIDE_DATA_ADB=0
+
+SUSFS=/data/adb/ksu/bin/ksu_susfs
+[ -x "$SUSFS" ] || { echo "hook: no ksu_susfs"; exit 0; }
+if ! "$SUSFS" show version >/dev/null 2>&1; then
+    echo "hook: susfs supercall not answering - is susfs_guard_lkm loaded?"
+    exit 0
+fi
+echo "hook: susfs $("$SUSFS" show version 2>/dev/null) is up"
+
+if [ "$HIDE_DATA_ADB" = "1" ]; then
+    if "$SUSFS" add_sus_path /data/adb >/dev/null 2>&1; then
+        echo "hook:   /data/adb hidden from app uids"
+    else
+        echo "hook:   FAILED to hide /data/adb"
+    fi
+else
+    echo "hook:   /data/adb left visible (HIDE_DATA_ADB=0)"
+fi
+
+# Paths OUTSIDE /data/adb are worth hiding, because nothing denies traversal
+# first -- these are reachable by apps today. Add your own; they do fire.
+for p in /data/local/tmp/susfs_guard_lkm.ko /data/local/tmp/susfs_new.ko; do
+    [ -e "$p" ] && "$SUSFS" add_sus_path "$p" >/dev/null 2>&1 && echo "hook:   hid $p"
+done
+
+# Last: every rule above is logged to dmesg as it is added, which is its own
+# trace. Comment out while debugging.
+"$SUSFS" enable_log 0 >/dev/null 2>&1 && echo "hook: kernel logging off"
+echo "hook: done"
+exit 0

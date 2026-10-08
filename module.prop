@@ -1,6 +1,6 @@
 id=susfs_lkm_loader
 name=Universal Kernel Module Autoloader
-version=1.9
-versionCode=19
+version=2.0
+versionCode=20
 author=zerotwo
 description=Load any kernel module (.ko) from the KernelSU WebUI, once or at every boot, with bootloop protection. No module is bundled.
