@@ -30,7 +30,11 @@
   --code:#F7F7F7;
   --radius:16px;
 }
-@media (prefers-color-scheme:dark){:root{
+/* The dark tokens are applied from two selectors: the system preference, UNLESS the user
+   picked light explicitly, and the explicit dark choice.  Both outrank :root on
+   specificity (an attribute selector on html), so no !important is needed. */
+@media (prefers-color-scheme:dark){html:not([data-theme="light"]){
+  color-scheme:dark;
   --surface:#000000;--card:#242424;--text:#F2F2F2;
   --summary:rgba(255,255,255,.5);--actions:rgba(255,255,255,.4);
   --primary:#277AF7;--primary-off:#253E64;--on-primary-off:#677893;
@@ -38,6 +42,16 @@
   --ok:#3DDC84;--warn-bg:#3A2E15;--warn-fg:#FFB84D;--bad-bg:#2E0603;--bad-fg:#FF8A80;
   --error:#F12522;--press:rgba(255,255,255,.08);--code:#161616;
 }}
+html[data-theme="dark"]{
+  color-scheme:dark;
+  --surface:#000000;--card:#242424;--text:#F2F2F2;
+  --summary:rgba(255,255,255,.5);--actions:rgba(255,255,255,.4);
+  --primary:#277AF7;--primary-off:#253E64;--on-primary-off:#677893;
+  --secondary:#434343;--info-bg:#2B3B54;--info-fg:#4788FF;
+  --ok:#3DDC84;--warn-bg:#3A2E15;--warn-fg:#FFB84D;--bad-bg:#2E0603;--bad-fg:#FF8A80;
+  --error:#F12522;--press:rgba(255,255,255,.08);--code:#161616;
+}
+html[data-theme="light"]{color-scheme:light}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{background:var(--surface)}
 body{margin:0;min-height:100vh;background:var(--surface);color:var(--text);
@@ -49,6 +63,23 @@ main{max-width:640px;margin:0 auto}
 .bar{position:sticky;top:0;z-index:5;height:calc(52px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);
   margin:0 -12px;display:flex;align-items:center;justify-content:center;background:var(--surface)}
 .bar span{font-size:18px;font-weight:600;opacity:0}
+/* position:sticky is a positioned ancestor, so the button resolves against the bar. It sits
+   in the visual 52px row, below the safe-area padding. */
+.theme{position:absolute;right:14px;bottom:9px;width:34px;height:34px;display:grid;place-items:center;
+  appearance:none;border:0;border-radius:17px;background:transparent;color:var(--text);cursor:pointer}
+.theme:active{background:var(--press)}
+.theme svg{width:21px;height:21px}
+
+/* Tabs */
+.tabs{position:sticky;top:calc(52px + env(safe-area-inset-top));z-index:4;margin:0 -12px;padding:2px 12px 10px;
+  display:flex;gap:6px;background:var(--surface)}
+.tab{flex:1;appearance:none;border:0;border-radius:12px;min-height:38px;padding:0 6px;font:inherit;font-size:14px;
+  font-weight:600;background:var(--secondary);color:var(--summary);cursor:pointer;transition:background .15s,color .15s}
+.tab[aria-selected="true"]{background:var(--primary);color:var(--on-primary)}
+.tab:active{filter:brightness(.95)}
+.tab[hidden]{display:none}
+.panel[hidden]{display:none}
+.panel > .small-title:first-child{margin-top:4px}
 .large{padding:8px 16px 16px;margin-top:-4px}
 .large h1{margin:0;font-size:32px;line-height:1.15;font-weight:700;letter-spacing:-.3px}
 
@@ -80,7 +111,8 @@ input[type=file]{display:none}
 .note .mono{display:block;margin-top:4px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.9}
 .progress{height:4px;margin:0 16px;border-radius:2px;background:var(--secondary);overflow:hidden}
 .fill{height:100%;width:0;background:var(--primary);border-radius:2px;transition:width .15s}
-.transfer{margin:8px 16px 14px;font-size:13px;color:var(--summary);word-break:break-word;min-height:1em}
+.transfer{margin:0 16px 10px;font-size:13px;color:var(--summary);word-break:break-word}
+.transfer:empty{display:none}
 
 /* Boot protection banner */
 .banner{margin:4px 0 0;padding:14px 16px;border-radius:var(--radius);background:var(--warn-bg);color:var(--warn-fg)}
@@ -112,14 +144,37 @@ input[type=file]{display:none}
 pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-word;
   background:var(--code);border-radius:12px;color:var(--summary);font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>
+<script>
+/* Before first paint: a theme chosen earlier must not flash the other one. Inline and
+   synchronous on purpose; localStorage can throw in a restricted WebView, hence the catch. */
+try { var _t = localStorage.getItem('ukma.theme'); if (_t) document.documentElement.setAttribute('data-theme', _t); } catch (e) {}
+</script>
 </head>
 <body>
 <main>
-<div class="bar"><span id="barTitle">Kernel Module Autoloader</span></div>
+<div class="bar"><span id="barTitle">Kernel Module Autoloader</span>
+  <button class="theme" id="themeBtn" type="button" aria-label="Switch theme">
+    <svg id="iconMoon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <svg id="iconSun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+  </button>
+</div>
 <div class="large" id="large"><h1>Kernel Module<br>Autoloader</h1></div>
 
 <div id="warning" class="banner" style="display:none"><b>Boot protection triggered</b><p id="warningText"></p><button class="btn sm" id="clearWarning">Dismiss</button></div>
 
+<nav class="tabs" role="tablist">
+  <button class="tab" type="button" role="tab" data-tab="module"  aria-selected="true" aria-controls="panel-module">Module</button>
+  <button class="tab" type="button" role="tab" data-tab="control" aria-selected="false" aria-controls="panel-control">Control</button>
+  <button class="tab" type="button" role="tab" data-tab="susfs"   aria-selected="false" aria-controls="panel-susfs" id="tabSusfs" hidden>SUSFS</button>
+  <button class="tab" type="button" role="tab" data-tab="logs"    aria-selected="false" aria-controls="panel-logs">Logs</button>
+</nav>
+
+<!-- Every operation reports here, and operations start from three different tabs - so this
+     cannot live inside one of them, or Unload/Reload/the hook toggle would write their
+     result to a panel the user is not looking at. -->
+<div class="transfer" id="transfer" role="status" aria-live="polite"></div>
+
+<section class="panel" id="panel-module" role="tabpanel">
 <div class="small-title">Device</div>
 <section class="card">
   <div class="item"><div class="body"><div class="title">Kernel release</div><div class="sum mono" id="kernel">Checking…</div></div></div>
@@ -137,7 +192,6 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <input id="ko" type="file" accept=".ko,application/octet-stream">
   <div class="note" id="compat">Build compatibility is shown after you pick a file. It is informational only and never blocks loading.</div>
   <div class="progress"><div class="fill" id="bar"></div></div>
-  <div class="transfer" id="transfer" role="status" aria-live="polite"></div>
 </section>
 <div class="actions">
   <button class="btn primary" id="load" disabled>Load once</button>
@@ -145,6 +199,9 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <button class="btn danger" id="remove">Remove saved module</button>
 </div>
 
+</section>
+
+<section class="panel" id="panel-control" role="tabpanel" hidden>
 <div class="small-title">Live control<button class="link-btn" id="refreshLive">Refresh</button></div>
 <section class="card">
   <div class="item"><div class="body"><div class="title">Module</div><div class="sum mono" id="liveName">—</div></div><div class="end" id="liveState">—</div></div>
@@ -162,12 +219,18 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
   <button class="btn secondary" id="hookBtn">Install SUSFS hook</button>
 </div>
 
-<div class="small-title" id="susfsTitle" style="display:none">SUSFS<button class="link-btn" id="refreshSusfs">Refresh</button></div>
-<section class="card" id="susfsCard" style="display:none">
+</section>
+
+<section class="panel" id="panel-susfs" role="tabpanel" hidden>
+<div class="small-title" id="susfsTitle">SUSFS<button class="link-btn" id="refreshSusfs">Refresh</button></div>
+<section class="card" id="susfsCard">
   <div class="item"><div class="body"><div class="title">Rules in kernel</div><div class="sum" id="susfsBreak">—</div></div><div class="end" id="susfsRules">—</div></div>
   <div class="item"><div class="body"><div class="title">Hide gate</div><div class="sum" id="susfsGateSum">Which apps the module hides from</div></div><div class="end" id="susfsGate">—</div></div>
 </section>
 
+</section>
+
+<section class="panel" id="panel-logs" role="tabpanel" hidden>
 <div class="small-title">Loaded modules<button class="link-btn" id="refreshModules">Refresh</button></div>
 <section class="card"><pre id="modules" style="margin-top:12px">Loading…</pre></section>
 
@@ -176,6 +239,7 @@ pre{margin:0 12px 12px;padding:12px;max-height:260px;overflow:auto;white-space:p
 
 <div class="small-title">Kernel log<button class="link-btn" id="refreshKlog">Refresh</button></div>
 <section class="card"><pre id="klog" style="margin-top:12px">Loading…</pre></section>
+</section>
 </main>
 
 <script>
@@ -235,6 +299,47 @@ const refreshLiveButtons = () => {
 };
 const setEnd = (el, text, type = '') => { el.className = 'end ' + type; el.textContent = text; };
 const note = (cls, html) => { $('compat').className = 'note ' + cls; $('compat').innerHTML = html; };
+
+// ---- theme ----------------------------------------------------------------------
+// Three states, two of them explicit: system (no attribute), light, dark. The button
+// shows where a tap GOES (a sun while dark, a moon while light), which is the convention
+// every Android app uses. localStorage can throw in a restricted WebView, so every access
+// is guarded and the toggle still works for the session if it does.
+const THEME_KEY = 'ukma.theme';
+const prefersDark = () => { try { return matchMedia('(prefers-color-scheme:dark)').matches; } catch (e) { return false; } };
+function applyTheme(t) {
+  const root = document.documentElement;
+  if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t);
+  else root.removeAttribute('data-theme');
+  const dark = (t === 'dark') || (t !== 'light' && prefersDark());
+  $('iconSun').style.display = dark ? '' : 'none';
+  $('iconMoon').style.display = dark ? 'none' : '';
+  $('themeBtn').setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+}
+let themeChoice = null;
+try { themeChoice = localStorage.getItem(THEME_KEY); } catch (e) {}
+applyTheme(themeChoice);
+$('themeBtn').addEventListener('click', () => {
+  const darkNow = (themeChoice === 'dark') || (themeChoice !== 'light' && prefersDark());
+  themeChoice = darkNow ? 'light' : 'dark';
+  try { localStorage.setItem(THEME_KEY, themeChoice); } catch (e) {}
+  applyTheme(themeChoice);
+});
+// Follow the system while no explicit choice has been made.
+try { matchMedia('(prefers-color-scheme:dark)').addEventListener('change', () => { if (!themeChoice) applyTheme(null); }); } catch (e) {}
+
+// ---- tabs -----------------------------------------------------------------------
+const TAB_KEY = 'ukma.tab';
+const tabs = () => [...document.querySelectorAll('.tab')];
+function showTab(id) {
+  const btn = tabs().find(b => b.dataset.tab === id && !b.hidden);
+  if (!btn) id = 'module';
+  tabs().forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === id)));
+  document.querySelectorAll('.panel').forEach(pl => { pl.hidden = pl.id !== 'panel-' + id; });
+  try { localStorage.setItem(TAB_KEY, id); } catch (e) {}
+  scrollTo(0, 0); onScroll();
+}
+tabs().forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 // Collapsing large title (miuix TopAppBar behaviour)
 const onScroll = () => {
@@ -339,7 +444,9 @@ async function refreshLive() {
 // .ko loader, so a SUSFS panel has no business appearing for an unrelated module.
 async function refreshSusfs() {
   const live = (await run('[ -r /proc/susfs_path ]')).errno === 0;
-  $('susfsTitle').style.display = $('susfsCard').style.display = live ? '' : 'none';
+  $('tabSusfs').hidden = !live;
+  // Nothing should be able to strand the user on a tab that just vanished.
+  if (!live && $('tabSusfs').getAttribute('aria-selected') === 'true') showTab('module');
   if (!live) return;
   const r = await run("T=$(grep -c '^path=' /proc/susfs_path 2>/dev/null); " +
                       "S=$(grep -c 'ours:' /proc/susfs_path 2>/dev/null); " +
@@ -637,7 +744,15 @@ if (!bridge) {
   $('kernel').textContent = $('kbuild').textContent = $('arch').textContent = 'Unavailable';
   $('kernel').classList.add('bad');
   document.querySelectorAll('button').forEach(b => b.disabled = true);
-} else { refreshAll().then(restoreStaged); }
+} else {
+  refreshAll().then(() => {
+    // After refreshSusfs(), so a saved "susfs" tab is only restored when it still exists.
+    let want = null;
+    try { want = localStorage.getItem(TAB_KEY); } catch (e) {}
+    if (want) showTab(want);
+    return restoreStaged();
+  });
+}
 </script>
 </body>
 </html>
