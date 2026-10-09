@@ -65,7 +65,11 @@ fi
 
 # Paths OUTSIDE /data/adb are worth hiding, because nothing denies traversal
 # first -- these are reachable by apps today. Add your own; they do fire.
-for p in /data/local/tmp/susfs*.ko /sdcard/susfs*.ko; do
+# /sdcard/Download too: anykernel.sh now drops the module there during a kernel flash,
+# and /sdcard/susfs*.ko does not match one directory deeper - our own delivery path was
+# leaving a susfs .ko outside the hide list.
+for p in /data/local/tmp/susfs*.ko /sdcard/susfs*.ko \
+         /sdcard/Download/susfs*.ko /storage/emulated/0/Download/susfs*.ko; do
     [ -e "$p" ] || continue
     "$SUSFS" add_sus_path "$p" >/dev/null 2>&1 && echo "hook:   hid $p"
 done
