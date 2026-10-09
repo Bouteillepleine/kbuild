@@ -1,6 +1,6 @@
 # Kernel module loader
 
-Allows to install Susfs4ksu module.
+Lets you install the Susfs4ksu module.
 
 ## How this works
 
