@@ -1,0 +1,35 @@
+#!/system/bin/sh
+# Example post-insmod hook.
+#
+# Copy to /data/adb/lkm/post-insmod.sh (chmod 700) and it runs from post-fs-data
+# immediately after the persistent module loads successfully. Output and exit code
+# go to /data/adb/lkm/log, and a failure here never blocks boot.
+#
+# Why this exists: a module that provides its own control ABI cannot be configured
+# before it is loaded, and ksud has already finished its own init by the time module
+# scripts run. This is the only correctly-ordered place.
+#
+# Below is the SUSFS case. `ksud susfs` is read-only (support/version/variant/
+# features), so rules go through ksu_susfs. Delete what you do not need.
+
+SUSFS=/data/adb/ksu/bin/ksu_susfs
+[ -x "$SUSFS" ] || exit 0
+
+# Bail out quietly if the loaded module is not actually SUSFS.
+"$SUSFS" show version >/dev/null 2>&1 || exit 0
+
+# Hide paths from apps (uid >= 10000). Root and shell still see them.
+# "$SUSFS" add_sus_path /data/adb
+# "$SUSFS" add_sus_path /data/adb/modules
+# "$SUSFS" add_sus_path /data/adb/ksu
+
+# Hide KernelSU's own mounts from non-su processes.
+# "$SUSFS" hide_sus_mnts_for_non_su_procs 1
+
+# Make a path's stat() report another file's inode/timestamps.
+# "$SUSFS" add_sus_kstat /data/adb/modules
+
+# Quieten the kernel log once the rules are in (they are logged as they are added).
+# "$SUSFS" enable_log 0
+
+exit 0
