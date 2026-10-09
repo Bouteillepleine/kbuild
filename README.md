@@ -1,17 +1,20 @@
 # Kernel module loader
 
-The loader half of the susfs-with-every-kernel setup: a KernelSU module that loads a
-`.ko` at boot, with bootloop protection and a WebUI.
+Allows to install Susfs4ksu module.
 
-The builders bundle `susfs_guard_lkm.ko` inside each kernel's AnyKernel3 zip, and
-`anykernel.sh` drops it in `/sdcard/Download` while flashing. Installing this module
-then adopts it automatically, if exactly one module on storage matches `uname -r`.
+## How this works
 
-- `customize.sh` - adopts a matching `.ko` at install (loose file, or out of an AK3 zip)
-- `post-fs-data.sh` - loads it at boot; arms a marker first so a module that panics
-  inside `insmod` is disabled on the next boot instead of being retried forever
-- `post-insmod.sh.susfs` - optional susfs rules, applied after the module is really in
-  the kernel, which is the only correctly-ordered place for a module's own configuration
-- `webroot/` - pick/load/unload/reload without a reboot
+This module does one job: load a kernel module at boot.
+
+1. You flash a kernel. Its zip carries `susfs_guard_lkm.ko`, built against that exact
+   kernel, and the flash drops it in `Download`.
+2. You install this module. It finds that file, checks it matches the running kernel, and
+   keeps it.
+
+**One module per kernel.** It is compiled against the kernel it ships with, so a module
+from another build or another device will not load. That is deliberate.
+
+The WebUI lets you pick a different `.ko`, unload or reload without rebooting, and see
+what is loaded now.
 
 Pack the contents of this branch (not the branch directory itself) into a zip to install.
