@@ -87,8 +87,10 @@ fi
 # susfs4ksu's WebUI tiles count only the paths IT applied, so they read 0 while the
 # kernel enforces these. Refresh its cache from live state; boot-completed.sh keeps
 # re-asserting it, because that module rewrites the file in its own boot-completed.
+# -s, not -x: `ksud module install` lands every script 0644 no matter what mode the zip
+# carried, so an -x guard here silently skips. It is run through `sh` either way.
 STATS=/data/adb/modules/susfs_lkm_loader/stats.sh
-[ -x "$STATS" ] && sh "$STATS" && echo "hook:   refreshed susfs4ksu stats"
+[ -s "$STATS" ] && sh "$STATS" && echo "hook:   refreshed susfs4ksu stats"
 
 echo "hook: done"
 exit 0

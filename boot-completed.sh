@@ -8,7 +8,9 @@ sh "${0%/*}/desc.sh" >/dev/null 2>&1
 # susfs4ksu rewrites its WebUI stats cache from its own boot-completed.sh, which may run
 # after this one. Re-assert for a couple of minutes, backgrounded, so script ordering
 # does not decide whether the tiles show the real numbers. No-op without susfs4ksu.
-if [ -x "${0%/*}/stats.sh" ]; then
+# -s, not -x: ksud installs scripts 0644 whatever the zip said, and this whole block used
+# to be skipped because of it. We invoke it with `sh`, so the mode is irrelevant.
+if [ -s "${0%/*}/stats.sh" ]; then
     # Fully detached: an inherited stdout would keep whatever started this script
     # waiting on us for the whole two minutes.
     (
