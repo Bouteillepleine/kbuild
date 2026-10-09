@@ -1,0 +1,57 @@
+name: loader
+
+# This branch is fetched and packed into every kernel release by three builders, so a
+# broken script here reaches users without anyone flashing anything. Check it on push.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Shell syntax
+        run: |
+          set -euo pipefail
+          # Every script here is run through `sh` by ksud or by the WebUI, never execed,
+          # so POSIX sh is the bar - not bash.
+          for f in *.sh post-insmod.sh.*; do
+            [ -f "$f" ] || continue
+            sh -n "$f" && echo "  ok   $f"
+          done
+
+      - name: Scripts must not depend on the executable bit
+        run: python3 -I tests/no-x-guard.py *.sh post-insmod.sh.*
+
+      - name: module.prop
+        run: |
+          set -euo pipefail
+          for k in id name version versionCode author description; do
+            grep -q "^${k}=" module.prop || { echo "::error::module.prop has no ${k}="; exit 1; }
+          done
+          echo "  ok   $(grep '^id=' module.prop), $(grep '^version=' module.prop)"
+
+      - name: Adoption logic
+        run: sh tests/adopt-cases.sh customize.sh
+
+      - name: Pack exactly as the builders do, and check what comes out
+        run: |
+          set -euo pipefail
+          V=$(awk -F= '/^version=/{print $2}' module.prop | head -1 | tr -d ' \r')
+          ZIP="00_Loader-Module-v${V#v}.zip"
+          zip -qr9 "/tmp/$ZIP" . -x "*.git*" -x "tests/*"
+          unzip -tqq "/tmp/$ZIP"
+          # module.prop at the ROOT: a nested one makes the module silently uninstallable.
+          unzip -l "/tmp/$ZIP" | grep -qE ' module\.prop$' \
+            || { echo "::error::module.prop is not at the zip root"; exit 1; }
+          echo "  ok   $ZIP ($(stat -c%s "/tmp/$ZIP") bytes)"
+          cp "/tmp/$ZIP" .
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: loader-module
+          path: 00_Loader-Module-*.zip
+          if-no-files-found: error
