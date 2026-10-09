@@ -32,36 +32,52 @@ TMP=$ROOT/.adopt.ko
 FOUND=0
 MATCH=
 MATCH_FROM=
+SEEN=
 
 UNZIP=$(command -v unzip 2>/dev/null)
 [ -n "$UNZIP" ] || { [ -x /data/adb/ksu/bin/busybox ] && UNZIP="/data/adb/ksu/bin/busybox unzip"; }
 
-# Priority order, and the FIRST directory that yields anything wins. Download is where a
-# flash leaves the module, so it decides; /data/local/tmp is only consulted when Download
-# had nothing, because that is a scratch directory and on a developer's phone it is full of
-# modules from other work - measured: 4 stale susfs builds there, which would otherwise
-# make every install ambiguous forever.
+# Count by CONTENT, not by file. After a normal flash Download holds both the module
+# anykernel.sh copied out AND the zip it came from - the same bytes twice. Counting files
+# made the ordinary case look ambiguous and refuse, every time.
+note_candidate() {
+    _h=$(sha256sum "$1" 2>/dev/null | cut -d' ' -f1)
+    [ -n "$_h" ] || return 0
+    case " $SEEN " in *" $_h "*) return 0 ;; esac
+    SEEN="$SEEN $_h"
+    FOUND=$((FOUND + 1))
+    MATCH=$1
+    MATCH_FROM=$2
+}
+
+# Loose .ko first, and a directory that yields one is the answer: it was put there by the
+# flash that just happened, so it outranks any zip still lying around from an older one.
+# Zips are the fallback for when /data was not writable at flash time.
 for d in /sdcard/Download /storage/emulated/0/Download /sdcard /data/local/tmp; do
     [ -d "$d" ] || continue
-
     for f in "$d"/*.ko; do
         [ -f "$f" ] || continue
         [ "$(ko_vermagic "$f")" = "$KREL" ] || continue
-        FOUND=$((FOUND + 1)); MATCH=$f; MATCH_FROM=$f
+        note_candidate "$f" "$f"
     done
+    [ "$FOUND" -gt 0 ] && break
+done
 
-    if [ -n "$UNZIP" ]; then
+if [ "$FOUND" -eq 0 ] && [ -n "$UNZIP" ]; then
+    for d in /sdcard/Download /storage/emulated/0/Download /sdcard /data/local/tmp; do
+        [ -d "$d" ] || continue
         for z in "$d"/AK3*.zip; do
             [ -f "$z" ] || continue
             $UNZIP -p "$z" susfs_guard_lkm.ko > "$TMP" 2>/dev/null || continue
             [ -s "$TMP" ] || continue
             [ "$(ko_vermagic "$TMP")" = "$KREL" ] || continue
-            FOUND=$((FOUND + 1)); MATCH=$TMP; MATCH_FROM="$z (bundled)"
+            note_candidate "$TMP" "$z (bundled)"
+            [ "$FOUND" -gt 0 ] && cp -f "$TMP" "$TMP.keep" 2>/dev/null
         done
-    fi
-
-    [ "$FOUND" -gt 0 ] && break
-done
+        [ "$FOUND" -gt 0 ] && break
+    done
+    [ -f "$TMP.keep" ] && { mv -f "$TMP.keep" "$TMP"; MATCH=$TMP; }
+fi
 
 if [ "$FOUND" -eq 0 ]; then
     rm -f "$TMP"
