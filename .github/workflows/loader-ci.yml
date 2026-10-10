@@ -37,6 +37,9 @@ jobs:
       - name: Adoption logic
         run: sh tests/adopt-cases.sh customize.sh
 
+      - name: Uninstall keeps the shared state while a sibling loader is installed
+        run: sh tests/uninstall-shared.sh
+
       - name: A susfs module is never loaded on top of a live SUSFS
         run: sh tests/no-stacking.sh
 
