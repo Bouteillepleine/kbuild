@@ -34,6 +34,46 @@ if [ -z "$KSUD" ]; then
     exit 0
 fi
 
+# ---- keep the armed hook current across module updates --------------------------------
+# $HOOK is a COPY of the module's post-insmod.sh.susfs, armed once from the WebUI, and
+# nothing used to refresh it: a module update shipped a new template that never reached
+# /data/adb/lkm, so the hook that actually ran stayed whatever version armed it.  It is
+# also a template people are meant to edit, so a blind copy would destroy their work.
+# The marker holds the sha256 of what was armed - still matching means untouched, so it
+# can be refreshed; differing means theirs, so it is left alone and said once.
+HOOK_SRC="$MODDIR/post-insmod.sh.susfs"
+HOOK_MARK="$ROOT/post-insmod.sha256"
+
+hook_sum() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
+
+if [ -s "$HOOK" ] && [ -f "$HOOK_SRC" ]; then
+    hook_now=$(hook_sum "$HOOK")
+    hook_want=$(hook_sum "$HOOK_SRC")
+    hook_was=$(cat "$HOOK_MARK" 2>/dev/null)
+    if [ -n "$hook_now" ] && [ -n "$hook_want" ] && [ "$hook_now" != "$hook_want" ]; then
+        if [ "$hook_now" = "$hook_was" ]; then
+            if cp -f "$HOOK_SRC" "$HOOK"; then
+                chmod 700 "$HOOK"
+                printf '%s\n' "$hook_want" > "$HOOK_MARK"
+                chmod 600 "$HOOK_MARK"
+                sync
+                echo "Refreshed the post-insmod hook from the module (it was unmodified)." >> "$LOG"
+            else
+                echo "WARNING: could not refresh the post-insmod hook; the armed one still runs." >> "$LOG"
+            fi
+        elif [ -z "$hook_was" ]; then
+            echo "NOTE: a newer post-insmod hook ships with this module. Yours was left alone because nothing recorded what armed it - re-arm from the WebUI to adopt it." >> "$LOG"
+        else
+            echo "NOTE: a newer post-insmod hook ships with this module. Yours has been edited, so it was left alone." >> "$LOG"
+        fi
+    elif [ "$hook_now" = "$hook_want" ] && [ "$hook_was" != "$hook_want" ]; then
+        # Already current, just unmarked (armed before this check existed): record it so the
+        # NEXT update can refresh silently.
+        printf '%s\n' "$hook_want" > "$HOOK_MARK"
+        chmod 600 "$HOOK_MARK"
+    fi
+fi
+
 if [ ! -f "$FLAG" ] || [ ! -s "$PERSIST" ]; then
     echo "No persistent module configured." >> "$LOG"
     exit 0

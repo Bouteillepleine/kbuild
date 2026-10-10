@@ -660,12 +660,15 @@ $('hookBtn').addEventListener('click', async () => {
   setBusy(true);
   const live = ROOT + '/post-insmod.sh';
   const src = '/data/adb/modules/susfs_lkm_loader/post-insmod.sh.susfs';
+  // Marker: the sha256 of what was armed, so post-fs-data.sh can tell an untouched hook
+  // (safe to refresh on a module update) from one the user edited (never touched).
+  const mark = ROOT + '/post-insmod.sha256';
   const have = (await run(`[ -s ${quote(live)} ]`)).errno === 0;
   if (have) {
-    await run(`rm -f ${quote(live)} && sync`);
+    await run(`rm -f ${quote(live)} ${quote(mark)} && sync`);
     $('transfer').textContent = 'Hook removed. Rules already applied stay until reboot.';
   } else {
-    const r = await run(`[ -f ${quote(src)} ] && cp -f ${quote(src)} ${quote(live)} && chmod 700 ${quote(live)} && sync`);
+    const r = await run(`[ -f ${quote(src)} ] && cp -f ${quote(src)} ${quote(live)} && chmod 700 ${quote(live)} && sha256sum ${quote(live)} | cut -d' ' -f1 > ${quote(mark)} && chmod 600 ${quote(mark)} && sync`);
     $('transfer').textContent = r.errno
       ? 'Could not install the hook: ' + ((r.stdout || r.stderr).trim() || 'exit ' + r.errno)
       : 'Hook installed. /data/adb is hidden from the apps KernelSU umounts modules for; the manager is not one of them.';

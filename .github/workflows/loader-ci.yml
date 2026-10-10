@@ -37,6 +37,9 @@ jobs:
       - name: Adoption logic
         run: sh tests/adopt-cases.sh customize.sh
 
+      - name: The armed hook refreshes on an update, and never clobbers an edited one
+        run: sh tests/hook-refresh.sh
+
       - name: Pack exactly as the builders do, and check what comes out
         run: |
           set -euo pipefail
