@@ -4,7 +4,7 @@
 # (via its EXIT trap), boot-completed.sh, and the WebUI after a load/unload/remove.
 
 MODDIR=${0%/*}
-[ -f "$MODDIR/module.prop" ] || MODDIR=/data/adb/modules/susfs_lkm_loader
+[ -f "$MODDIR/module.prop" ] || MODDIR=/data/adb/modules/ukma_loader
 [ -f "$MODDIR/module.prop" ] || exit 0
 
 ROOT=/data/adb/lkm

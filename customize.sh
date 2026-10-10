@@ -14,13 +14,33 @@ ROOT=/data/adb/lkm
 mkdir -p "$ROOT"; chmod 700 "$ROOT"
 
 ui_print " "
+
+# The id changed from susfs_lkm_loader to ukma_loader: another project ships a different
+# module under the old id, and KernelSU keys modules by id, so the two overwrote each other.
+# This installs as a NEW module - the old directory is left alone and its post-fs-data.sh
+# keeps running at every boot until it is removed.  Both would then race to load from the
+# same /data/adb/lkm, so say so loudly rather than silently leaving two loaders armed.
+if [ -f /data/adb/modules/susfs_lkm_loader/module.prop ]; then
+    ui_print "! The previous version is still installed under its old id,"
+    ui_print "!   susfs_lkm_loader. Remove it in the manager's module list,"
+    ui_print "!   or two loaders will both try to load /data/adb/lkm/persistent.ko."
+    ui_print " "
+fi
 if [ -s "$ROOT/persistent.ko" ]; then
     ui_print "- A module is already configured; leaving it alone."
     ui_print "- Use the WebUI to replace it."
     return 0 2>/dev/null || exit 0
 fi
 
-KREL=$(uname -r)
+# /proc/sys/kernel/osrelease, NOT `uname -r`: susfs's set_uname spoofs uname(2) with a
+# kretprobe on __arm64_sys_newuname that rewrites the caller's struct, and never touches
+# init_uts_ns - so the sysctl stays truthful while `uname -r` lies.  Matching a .ko's vermagic
+# against a spoofed release matches nothing and refuses every candidate with no hint why.
+OSRELEASE=/proc/sys/kernel/osrelease
+# `|| true`: an assignment takes the substitution's exit status, so a missing sysctl would
+# abort a caller running under `set -e`.
+KREL=$(cat "$OSRELEASE" 2>/dev/null || true)
+[ -n "$KREL" ] || KREL=$(uname -r)
 ui_print "- Looking for a module built for $KREL"
 
 # vermagic out of a .ko on disk. The field is NUL-separated in .modinfo, so anchor on it.

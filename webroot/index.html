@@ -246,6 +246,8 @@ try { var _t = localStorage.getItem('ukma.theme'); if (_t) document.documentElem
 const $ = id => document.getElementById(id);
 const bridge = window.ksu;
 
+const MODID = 'ukma_loader';          // must match module.prop's id
+const MODDIR = '/data/adb/modules/' + MODID;
 const ROOT = '/data/adb/lkm';
 const paths = {
   selected: ROOT + '/webui-selected.ko',
@@ -386,7 +388,9 @@ const sh = async cmd => (await run(cmd)).stdout.trim();
 
 async function refreshDevice() {
   const r = await run(
-    'R=$(uname -r 2>/dev/null || cat /proc/sys/kernel/osrelease); ' +
+    // osrelease first: susfs's set_uname spoofs uname(2) but not init_uts_ns, so the
+    // sysctl is the release a .ko's vermagic has to match.
+    'R=$(cat /proc/sys/kernel/osrelease 2>/dev/null || uname -r); ' +
     'M=$(uname -m 2>/dev/null || getprop ro.product.cpu.abi); ' +
     'V=$(uname -v 2>/dev/null || cat /proc/sys/kernel/version); ' +
     "printf '%s\\n%s\\n%s\\n' \"$R\" \"$M\" \"$V\"");
@@ -490,7 +494,7 @@ async function refreshWarning() {
 }
 // The manager card shows module.prop's description, and desc.sh rewrites it from the
 // live state - so a load/unload done here is reflected on the card without a reboot.
-const refreshCard = () => run('sh /data/adb/modules/susfs_lkm_loader/desc.sh >/dev/null 2>&1');
+const refreshCard = () => run(`sh ${MODDIR}/desc.sh >/dev/null 2>&1`);
 const refreshAll = () => Promise.all([refreshDevice(), refreshModules(), refreshLog(), refreshKlog(), refreshWarning(), refreshLive(), refreshSusfs(), refreshCard()]);
 
 function toBase64(u8) {
@@ -659,7 +663,7 @@ $('reload').addEventListener('click', async () => {
 $('hookBtn').addEventListener('click', async () => {
   setBusy(true);
   const live = ROOT + '/post-insmod.sh';
-  const src = '/data/adb/modules/susfs_lkm_loader/post-insmod.sh.susfs';
+  const src = MODDIR + '/post-insmod.sh.susfs';
   // Marker: the sha256 of what was armed, so post-fs-data.sh can tell an untouched hook
   // (safe to refresh on a module update) from one the user edited (never touched).
   const mark = ROOT + '/post-insmod.sha256';

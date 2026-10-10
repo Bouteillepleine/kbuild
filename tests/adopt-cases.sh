@@ -12,17 +12,29 @@ set -eu
 SRC=${1:-customize.sh}
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 KREL="6.12.58-test-kernel"
+# customize.sh is SOURCED, so it assigns the same $KREL this harness uses - keep an
+# untouchable copy for the uname mock, or the fallback case reads back an empty string.
+KREL_REAL=$KREL
 fail=0
 
 mkko() { printf 'junk\0vermagic=%s SMP preempt mod_unload modversions aarch64\0name=%s\0junk' "$2" "${3:-susfs_guard_lkm}" > "$1"; }
 
-run() {  # run <scandir> <rootdir>
+# The kernel release is mocked at its SOURCE, not by rewriting the assignment: customize.sh
+# reads $OSRELEASE and falls back to `uname -r` only if that fails, and the ORDER is the point
+# (susfs's set_uname spoofs uname(2) but not the sysctl), so the test exercises the real read.
+run() {  # run <scandir> <rootdir> [osrelease contents; "" = unreadable, forcing the fallback]
+  if [ "${3-unset}" = unset ]; then printf '%s\n' "$KREL" > "$T/osrelease"
+  elif [ -n "$3" ]; then printf '%s\n' "$3" > "$T/osrelease"
+  else rm -f "$T/osrelease"
+  fi
   sed -e "s#^ROOT=/data/adb/lkm#ROOT=$2#" \
-      -e "s#KREL=\$(uname -r)#KREL=$KREL#" \
+      -e "s#^OSRELEASE=/proc/sys/kernel/osrelease#OSRELEASE=$T/osrelease#" \
       -e "s#/sdcard/Download /storage/emulated/0/Download /sdcard /data/local/tmp#$1#g" \
       "$SRC" > "$T/run.sh"
   ui_print() { :; }
+  uname() { if [ "${1-}" = -r ]; then printf '%s\n' "${UNAME_R:-$KREL_REAL}"; else command uname "$@"; fi; }
   . "$T/run.sh"
+  unset -f uname
 }
 
 check() { # check <name> <expected: adopt|refuse> <rootdir> [expected-sha-source]
@@ -76,5 +88,20 @@ mkko "$S/dl/susfs_guard_lkm.ko" "$KREL"
 mkko "$S/tmp/old1.ko" "$KREL"; printf 'a' >> "$S/tmp/old1.ko"
 mkko "$S/tmp/old2.ko" "$KREL"; printf 'bb' >> "$S/tmp/old2.ko"
 run "$S/dl $S/tmp" "$R"; check "Download wins over a cluttered scratch dir" adopt "$R" "$S/dl/susfs_guard_lkm.ko"
+
+# H: the reason the read moved off `uname -r`.  susfs's set_uname spoofs uname(2) with a
+# kretprobe on __arm64_sys_newuname and never touches init_uts_ns, so a spoofed device reports
+# a fake release from uname and the TRUE one from the sysctl.  Matching vermagic against the
+# fake matched nothing and refused every candidate, with no hint why.
+S=$T/h; R=$T/hr; mkdir -p "$S" "$R"
+mkko "$S/susfs_guard_lkm.ko" "$KREL"
+UNAME_R="4.4.0-totally-spoofed" run "$S" "$R"
+check "spoofed uname, honest osrelease" adopt "$R" "$S/susfs_guard_lkm.ko"
+
+# I: ... and the fallback still works where the sysctl cannot be read.
+S=$T/i; R=$T/ir; mkdir -p "$S" "$R"
+mkko "$S/susfs_guard_lkm.ko" "$KREL"
+run "$S" "$R" ""
+check "no osrelease, falls back to uname" adopt "$R" "$S/susfs_guard_lkm.ko"
 
 [ "$fail" -eq 0 ] && echo "all adoption cases passed" || { echo "$fail case(s) failed"; exit 1; }

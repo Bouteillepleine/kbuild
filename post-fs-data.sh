@@ -93,6 +93,27 @@ fi
 # "written" is not "on disk": a module that panics the kernel inside insmod takes the
 # page cache with it, the marker is lost, and the next boot cheerfully retries the same
 # module.  That is the one case this guard exists for.
+# The module's own name, out of .modinfo - needed BEFORE the load for the stacking check
+# below, and reused afterwards for the WebUI's rmmod control.
+NAME="$(strings "$PERSIST" 2>/dev/null | sed -n 's/^name=\([A-Za-z0-9_-]\{1,\}\)$/\1/p' | head -1)"
+
+# Two SUSFS implementations in one kernel is not a supported configuration: they hook the same
+# LSM slots and /proc nodes, and the second one to arm wins silently.  `ksud insmod` only
+# refuses a module of the SAME NAME (-EEXIST), so it does not catch a built-in SUSFS or an LKM
+# packaged under another name.  Ask the interface instead - ksu_susfs talks to whichever
+# implementation is live - and only for a module that is itself susfs, because this loader
+# exists to load ANY .ko and an unrelated module has no business being gated on this.
+case "$NAME" in
+    susfs*)
+        SUSFS_BIN=${SUSFS_BIN:-/data/adb/ksu/bin/ksu_susfs}
+        if [ -x "$SUSFS_BIN" ] && "$SUSFS_BIN" show version >/dev/null 2>&1; then
+            echo "SUSFS already answers on this kernel ($("$SUSFS_BIN" show version 2>/dev/null)): refusing to load $NAME on top of it." >> "$LOG"
+            echo "A SUSFS implementation is already active on this kernel, so the saved module was NOT loaded. Stacking two of them is not supported - remove one." > "$WARNING"
+            exit 0
+        fi
+        ;;
+esac
+
 touch "$PENDING"
 sync
 echo "Loading persistent module: $PERSIST" >> "$LOG"
@@ -100,9 +121,8 @@ echo "Loading persistent module: $PERSIST" >> "$LOG"
 RESULT=$?
 echo "Exit code: $RESULT" >> "$LOG"
 
-# The module NAME, for the WebUI's live controls (rmmod takes a name, not a path).
-# Read out of the .ko's .modinfo; harmless if the tools are missing.
-NAME="$(strings "$PERSIST" 2>/dev/null | sed -n 's/^name=\([A-Za-z0-9_-]\{1,\}\)$/\1/p' | head -1)"
+# NAME was read before the load (see the stacking check); publish it for the WebUI's live
+# controls, which take a name rather than a path.
 if [ -n "$NAME" ]; then
     printf '%s\n' "$NAME" > "$ROOT/loaded.name"
     chmod 600 "$ROOT/loaded.name"
