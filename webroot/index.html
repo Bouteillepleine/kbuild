@@ -461,9 +461,19 @@ async function refreshSusfs() {
   $('susfsBreak').textContent = Number.isFinite(t) && Number.isFinite(sp) && tot !== ''
     ? sp + ' self-protection + ' + (t - sp) + ' yours' : '—';
   // dmesg rotates, and the hook turns susfs logging off, so "unknown" is a real answer here.
-  const deny = gate.indexOf('following') >= 0, fallback = gate.indexOf('is not') >= 0;
-  setEnd($('susfsGate'), deny ? 'DenyList' : fallback ? 'uid >= 10000' : 'Unknown', deny ? 'ok' : fallback ? 'warn' : '');
-  $('susfsGateSum').textContent = deny ? 'Follows KernelSU\u2019s DenyList; the manager is never hidden from'
+  // Two generations of the kernel-side message, because the loader and the .ko ship
+  // separately: "following KernelSU's DenyList (...)" up to 2026-10-10, and
+  // "ksu_uid_should_umount is present" since the gate became a link-time import.
+  // 'refusing to load' is new with that import - the gate is a FATAL init layer now,
+  // so a missing symbol stops the load instead of hiding from every app.
+  const refused = gate.indexOf('refusing to load') >= 0;
+  const deny = !refused && (gate.indexOf('following') >= 0 || gate.indexOf('is present') >= 0);
+  const fallback = !refused && !deny &&
+    (gate.indexOf('is not') >= 0 || gate.indexOf('is_magisk=1') >= 0);
+  setEnd($('susfsGate'), refused ? 'Refused' : deny ? 'DenyList' : fallback ? 'uid >= 10000' : 'Unknown',
+    refused ? 'warn' : deny ? 'ok' : fallback ? 'warn' : '');
+  $('susfsGateSum').textContent = refused ? 'The module refused to load: KernelSU\u2019s ksu_uid_should_umount could not be supplied'
+    : deny ? 'Follows KernelSU\u2019s DenyList; the manager is never hidden from'
     : fallback ? 'Fallback: hides from EVERY app, the manager included'
     : 'Not in the kernel log (it rotates, and the hook turns susfs logging off)';
 }

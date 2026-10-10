@@ -27,9 +27,24 @@
 #    UID_SHOULD_UMOUNT ioctl wraps, so hiding applies to exactly the apps you
 #    ticked "Umount modules" for. The manager is excluded by KernelSU itself,
 #    and so are apps you granted su. Check which build you are running:
-#      dmesg | grep 'hide gate'
-#    "following KernelSU's DenyList" -> safe to hide /data/adb.
-#    "falling back to uid >= 10000"  -> old behaviour, set HIDE_DATA_ADB=0.
+#      dmesg | grep -E 'hide gate|ksu_umount_gate|is_magisk=1'
+#    "following KernelSU's DenyList"  -> DenyList (builds up to 2026-10-10)
+#    "ksu_uid_should_umount is present" -> DenyList (current builds)
+#    "falling back to uid >= 10000"   -> old behaviour, set HIDE_DATA_ADB=0.
+#    "is_magisk=1"                    -> no KernelSU to ask, same old behaviour.
+#    Two generations, because the loader and the .ko ship separately and either
+#    can be older than the other.
+#
+#    Current builds reach that function as a LINK-TIME import filled in by
+#    whoever loads the .ko, not through kallsyms. That buys the LKM-KernelSU
+#    case the old lookup could never serve, and costs a new failure mode: the
+#    gate is the first and FATAL init layer, so if the symbol cannot be
+#    supplied the module REFUSES TO LOAD rather than quietly hiding from every
+#    app. "refusing to load" in dmesg is that, and the cause is one of:
+#      - kernelsu.ko is not loaded yet -> load this module after it;
+#      - KernelSU is older than that symbol;
+#      - no KernelSU at all -> load with susfs_insmod, which passes is_magisk=1.
+#    A non-zero "Exit code" in the loader log with no rules applied is this.
 #
 # 4. Follows from 3: if your global "Umount modules" default is off and an app
 #    is not in the denylist, nothing is hidden from it. That is intended -- it
@@ -78,7 +93,10 @@ done
 # dmesg rotates past it. It is the one line that says whether hiding follows KernelSU's
 # DenyList or the old uid >= 10000 proxy, it is printed once per load, and by the time
 # anyone looks it is usually gone - so the WebUI reads this file, not dmesg.
-GATE=$(dmesg 2>/dev/null | grep 'hide gate' | tail -1)
+# Both generations of the message, and the refusal: 'hide gate' also catches the
+# current wording ("the hide gates ..."), but only by substring, so the names are
+# spelled out rather than left to luck.
+GATE=$(dmesg 2>/dev/null | grep -E 'hide gate|ksu_umount_gate|is_magisk=1|refusing to load' | tail -1)
 if [ -n "$GATE" ]; then
     printf '%s\n' "$GATE" > /data/adb/lkm/hide-gate
     chmod 600 /data/adb/lkm/hide-gate

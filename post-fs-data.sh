@@ -77,7 +77,22 @@ fi
 if [ "$RESULT" -ne 0 ]; then
     rm -f "$FLAG" "$PENDING" "$ROOT/loaded.name"
     sync
-    echo "The saved kernel module failed to load and was disabled. Make sure it was built for this device's kernel." > "$WARNING"
+    # ksud reports its own exit code; the module's reason for refusing is in dmesg, and
+    # nothing above would ever show it.  susfs_guard_lkm's hide gate is a FATAL init layer
+    # from 2026-10-10 on, so "could not be supplied" is now a routine cause of a failed
+    # load - not a wrong kernel - and the two deserve different advice.
+    REASON=$(dmesg 2>/dev/null | grep -E 'refusing to load|Unknown symbol' | tail -1)
+    if [ -n "$REASON" ]; then
+        echo "kernel said: $REASON" >> "$LOG"
+    fi
+    case "$REASON" in
+        *refusing\ to\ load*|*Unknown\ symbol*)
+            echo "The saved kernel module was disabled: the kernel refused to load it because a symbol it needs could not be supplied. If this is susfs_guard_lkm, load it AFTER kernelsu.ko, or use susfs_insmod on a device without KernelSU." > "$WARNING"
+            ;;
+        *)
+            echo "The saved kernel module failed to load and was disabled. Make sure it was built for this device's kernel." > "$WARNING"
+            ;;
+    esac
     echo "WARNING: persistent module failed to load; disabled." >> "$LOG"
 fi
 
