@@ -37,6 +37,9 @@ jobs:
       - name: Adoption logic
         run: sh tests/adopt-cases.sh customize.sh
 
+      - name: A stale module is refused before the load, and the config survives
+        run: sh tests/preload-check.sh
+
       - name: The WebUI gate tile reads every wording the kernel has used
         run: sh tests/gate-tile.sh
 

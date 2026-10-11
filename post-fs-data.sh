@@ -114,6 +114,31 @@ case "$NAME" in
         ;;
 esac
 
+# ---- pre-load integrity ----------------------------------------------------------------
+# A persisted .ko outlives the kernel it was built for: flash a new one and this file is now
+# for the wrong one.  `ksud insmod` then fails and the failure path below DISABLES boot
+# loading, so the user loses the configuration as well as the load, with "make sure it was
+# built for this device's kernel" as the only clue.  Checking first turns that into a precise
+# message and KEEPS the configuration, because a kernel change is not a bad module.
+#
+# /proc/sys/kernel/osrelease, not `uname -r`: susfs's set_uname spoofs uname(2) and leaves the
+# sysctl alone, so matching vermagic against uname would fail on a device that spoofs it.
+# The sha256 is recorded, not enforced: this loader loads whatever the user configured, so
+# there is no authoritative hash to compare against - it is in the log to say exactly which
+# bytes were loaded, which is what a later "why did it stop working" needs.
+KREL=$(cat /proc/sys/kernel/osrelease 2>/dev/null || true)
+[ -n "$KREL" ] || KREL=$(uname -r)
+KO_VM="$(strings "$PERSIST" 2>/dev/null | sed -n 's/^vermagic=\([^ ]*\).*/\1/p' | head -1)"
+echo "module: $(stat -c %s "$PERSIST" 2>/dev/null) bytes, sha256 $(sha256sum "$PERSIST" 2>/dev/null | cut -d' ' -f1)" >> "$LOG"
+echo "vermagic: ${KO_VM:-unreadable} / running: $KREL" >> "$LOG"
+if [ -n "$KO_VM" ] && [ "$KO_VM" != "$KREL" ]; then
+    echo "WARNING: the saved module was built for $KO_VM but this kernel is $KREL - NOT loading it." >> "$LOG"
+    echo "The saved kernel module was built for $KO_VM and this kernel is $KREL, so it was not loaded. It is still configured: replace it from the WebUI with one built for this kernel." > "$WARNING"
+    rm -f "$PENDING"
+    sync
+    exit 0
+fi
+
 touch "$PENDING"
 sync
 echo "Loading persistent module: $PERSIST" >> "$LOG"
@@ -126,6 +151,34 @@ echo "Exit code: $RESULT" >> "$LOG"
 if [ -n "$NAME" ]; then
     printf '%s\n' "$NAME" > "$ROOT/loaded.name"
     chmod 600 "$ROOT/loaded.name"
+fi
+
+# ---- post-load assertion ---------------------------------------------------------------
+# `insmod` returning 0 means the kernel took the image and init_module() did not fail; it does
+# NOT mean the feature came up.  Check for the module where it should be visible - and treat
+# "nowhere" as a NOTE rather than an error, because a module that hides itself is exactly what
+# this one does: susfs_guard_lkm filters itself out of /proc/modules and /sys/module for every
+# caller, root included, so for a susfs module the supercall interface is the only honest
+# witness.
+if [ "$RESULT" -eq 0 ]; then
+    armed=unknown
+    if [ -n "$NAME" ] && [ -d "/sys/module/$NAME" ]; then
+        armed=yes
+    elif [ -n "$NAME" ] && grep -q "^$NAME " /proc/modules 2>/dev/null; then
+        armed=yes
+    else
+        case "$NAME" in
+            susfs*)
+                SUSFS_BIN=${SUSFS_BIN:-/data/adb/ksu/bin/ksu_susfs}
+                if [ -x "$SUSFS_BIN" ] && v=$("$SUSFS_BIN" show version 2>/dev/null); then
+                    armed=yes
+                    echo "susfs answers: $v" >> "$LOG"
+                fi
+                ;;
+        esac
+    fi
+    echo "armed: $armed" >> "$LOG"
+    [ "$armed" = yes ] || echo "NOTE: insmod reported success but $NAME is not visible in /sys/module or /proc/modules and no interface answered - it may be hiding itself, or it may have loaded without arming." >> "$LOG"
 fi
 
 if [ "$RESULT" -eq 0 ] && [ -s "$HOOK" ]; then
