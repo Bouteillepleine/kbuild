@@ -10,7 +10,10 @@ BLOCK=$(mktemp); T=$(mktemp -d)
 trap 'rm -rf "$BLOCK" "$T"' EXIT
 
 A=$(grep -n '^# The module.s own name, out of .modinfo' post-fs-data.sh | cut -d: -f1)
-B=$(grep -n '^touch "\$PENDING"' post-fs-data.sh | cut -d: -f1)
+# End at the pre-load integrity block, NOT at `touch $PENDING`: v2.12 inserted the vermagic
+# gate between the two, and slicing up to the touch dragged that gate into this test, where its
+# fake .ko has a vermagic the host kernel does not match - so every case read as "refuse".
+B=$(grep -n '^# ---- pre-load integrity' post-fs-data.sh | cut -d: -f1)
 if [ -z "${A:-}" ] || [ -z "${B:-}" ] || [ "$A" -ge "$B" ]; then
     echo "  FAIL could not locate the stacking guard in post-fs-data.sh (did it move?)"
     exit 1
