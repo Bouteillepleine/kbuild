@@ -470,17 +470,45 @@ async function refreshSusfs() {
   // "ksu_uid_should_umount is present" since the gate became a link-time import.
   // 'refusing to load' is new with that import - the gate is a FATAL init layer now,
   // so a missing symbol stops the load instead of hiding from every app.
-  const refused = gate.indexOf('refusing to load') >= 0;
-  const deny = !refused && (gate.indexOf('following') >= 0 || gate.indexOf('is present') >= 0);
-  const fallback = !refused && !deny &&
-    (gate.indexOf('is not') >= 0 || gate.indexOf('is_magisk=1') >= 0);
-  setEnd($('susfsGate'), refused ? 'Refused' : deny ? 'DenyList' : fallback ? 'uid >= 10000' : 'Unknown',
-    refused ? 'warn' : deny ? 'ok' : fallback ? 'warn' : '');
-  $('susfsGateSum').textContent = refused ? 'The module refused to load: KernelSU\u2019s ksu_uid_should_umount could not be supplied'
-    : deny ? 'Follows KernelSU\u2019s DenyList; the manager is never hidden from'
-    : fallback ? 'Fallback: hides from EVERY app, the manager included'
-    : 'Not in the kernel log (it rotates, and the hook turns susfs logging off)';
+  const g = classifyGate(gate);
+  setEnd($('susfsGate'), g.label, g.cls);
+  $('susfsGateSum').textContent = g.sum;
 }
+
+/* --- BEGIN gate-tile classifier (tests/gate-tile.sh slices this out and runs it) ---
+ * The kernel's gate line has been reworded three times in two days: "following KernelSU's
+ * DenyList", then "ksu_uid_should_umount is present", then "resolved ksu_uid_should_umount
+ * at ... now answer KernelSU".  Matching the SUCCESS wording means the next rename silently
+ * reports a working gate as unknown, which is what v2.6 and v2.10 both did.
+ *
+ * So: test the exceptional states first, because their markers are short functional strings
+ * rather than prose - "refusing to load", "is_magisk=1", "falling back".  A line that is a
+ * gate line but matches no known wording is reported as UNRECOGNISED with the kernel's own
+ * text, not guessed at: defaulting such a line to "DenyList" would be a false reassurance
+ * (the fallback state is the dangerous one - it hides from every app, the manager included),
+ * and defaulting to "Unknown" throws away the one piece of evidence there is. */
+function classifyGate(gate) {
+  gate = gate || '';
+  if (!gate)
+    return { label: '\u2014', cls: '',
+             sum: 'Not in the kernel log (it rotates, and the hook turns susfs logging off)' };
+  if (gate.indexOf('refusing to load') >= 0)
+    return { label: 'Refused', cls: 'warn',
+             sum: 'The module refused to load: KernelSU\u2019s ksu_uid_should_umount could not be supplied' };
+  if (gate.indexOf('is_magisk=1') >= 0 || gate.indexOf('is not resolvable') >= 0 ||
+      gate.indexOf('falling back') >= 0)
+    return { label: 'uid >= 10000', cls: 'warn',
+             sum: 'Fallback: hides from EVERY app, the manager included' };
+  if (gate.indexOf('following') >= 0 || gate.indexOf('is present') >= 0 ||
+      gate.indexOf('answer KernelSU') >= 0 || gate.indexOf('resolved ksu_uid_should_umount') >= 0)
+    return { label: 'DenyList', cls: 'ok',
+             sum: 'Follows KernelSU\u2019s DenyList; the manager is never hidden from' };
+  if (gate.indexOf('ksu_umount_gate') >= 0 || gate.indexOf('hide gate') >= 0)
+    return { label: 'Unrecognised', cls: 'warn',
+             sum: 'Unrecognised gate message - the kernel said: ' + gate };
+  return { label: '\u2014', cls: '', sum: 'Not a gate line' };
+}
+/* --- END gate-tile classifier --- */
 async function refreshLog() { $('log').textContent = await sh(`tail -n 120 ${paths.log} 2>/dev/null`) || 'No loader log yet.'; }
 async function refreshKlog() {
   let t = await sh('dmesg 2>/dev/null | tail -n 120');

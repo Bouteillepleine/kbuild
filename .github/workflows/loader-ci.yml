@@ -37,6 +37,9 @@ jobs:
       - name: Adoption logic
         run: sh tests/adopt-cases.sh customize.sh
 
+      - name: The WebUI gate tile reads every wording the kernel has used
+        run: sh tests/gate-tile.sh
+
       - name: Uninstall keeps the shared state while a sibling loader is installed
         run: sh tests/uninstall-shared.sh
 
