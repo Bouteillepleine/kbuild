@@ -1,8 +1,11 @@
 name: Build
 
-# Manual only: this repo holds several unrelated branches and nobody wants a
-# build kicked off by every push.
+# Scoped to this branch only: kbuild holds several unrelated branches and none
+# of them should trigger an Android build. workflow_dispatch alone does not work
+# here because the file is not on the default branch, so GitHub cannot see it.
 on:
+  push:
+    branches: [cc-qs-tiles]
   workflow_dispatch:
 
 jobs:
